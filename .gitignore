@@ -57,3 +57,12 @@ Thumbs.db
 .env.development.local
 .env.test.local
 .env.production.local 
+
+
+#json
+/transcriptions.json
+/processing_status.json
+/segments.json
+/segments_status.json
+/segments_status.json
+/transcriptions_status.json

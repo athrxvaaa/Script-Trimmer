@@ -140,6 +140,56 @@ def cleanup_previous_files():
     
     return cleaned_count
 
+def cleanup_intermediate_files(video_path: Path, audio_path: Path = None):
+    """Clean up intermediate files after video segment extraction is complete"""
+    logger.info("🧹 Cleaning up intermediate files after video segment extraction...")
+    
+    cleaned_count = 0
+    
+    # Clean up intermediate JSON files
+    intermediate_files = ["transcriptions.json", "segments.json"]
+    for filename in intermediate_files:
+        file_path = Path(filename)
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                logger.info(f"🗑️  Deleted intermediate file: {filename}")
+                cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"⚠️  Could not delete {filename}: {e}")
+    
+    # Clean up audio chunks in output directory
+    if OUTPUT_DIR.exists():
+        try:
+            for file_path in OUTPUT_DIR.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in ['.mp3', '.aac', '.wav']:
+                    file_path.unlink()
+                    logger.info(f"🗑️  Deleted audio file: {file_path.name}")
+                    cleaned_count += 1
+        except Exception as e:
+            logger.warning(f"⚠️  Could not clean audio files: {e}")
+    
+    # Clean up original video file
+    if video_path.exists():
+        try:
+            video_path.unlink()
+            logger.info(f"🗑️  Deleted original video file: {video_path.name}")
+            cleaned_count += 1
+        except Exception as e:
+            logger.warning(f"⚠️  Could not delete video file: {e}")
+    
+    # Clean up original audio file if it exists
+    if audio_path and audio_path.exists():
+        try:
+            audio_path.unlink()
+            logger.info(f"🗑️  Deleted original audio file: {audio_path.name}")
+            cleaned_count += 1
+        except Exception as e:
+            logger.warning(f"⚠️  Could not delete audio file: {e}")
+    
+    logger.info(f"✅ Cleaned up {cleaned_count} intermediate files")
+    return cleaned_count
+
 def run_video_segment_extraction(video_path: Path) -> List[str]:
     """Run video segment extraction and return list of created video segments"""
     logger.info("🎬 Starting video segment extraction...")
@@ -354,6 +404,13 @@ async def extract_audio(
             try:
                 video_segments = run_video_segment_extraction(video_path)
                 logger.info("✅ Video segment extraction completed!")
+                
+                # Clean up intermediate files after successful video segment extraction
+                if video_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
             except Exception as e:
                 logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
                 video_segments = []
@@ -401,6 +458,13 @@ async def extract_audio(
             try:
                 video_segments = run_video_segment_extraction(video_path)
                 logger.info("✅ Video segment extraction completed!")
+                
+                # Clean up intermediate files after successful video segment extraction
+                if video_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
             except Exception as e:
                 logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
                 video_segments = []
@@ -436,11 +500,7 @@ async def extract_audio(
             audio_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
     
-    # Clean up video file AFTER all processing is complete
-    if video_path.exists():
-        logger.info("🗑️  Cleaning up temporary video file...")
-        video_path.unlink()
-        logger.info("✅ Temporary video file deleted")
+    # Note: Video file cleanup is now handled in cleanup_intermediate_files() after video segment extraction
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):

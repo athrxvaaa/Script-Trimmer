@@ -55,6 +55,7 @@ async def root():
             "delete_all": "/files",
             "list_video_segments": "/video-segments",
             "download_video_segment": "/download-video/{filename}",
+            "cleanup": "/cleanup",
             "logs": "/logs",
             "docs": "/docs"
         }
@@ -96,6 +97,48 @@ class VideoSegmentResponse(BaseModel):
 def get_file_size_mb(file_path: Path) -> float:
     """Get file size in MB"""
     return file_path.stat().st_size / (1024 * 1024)
+
+def cleanup_previous_files():
+    """Clean up remnant files from previous processing runs"""
+    logger.info("🧹 Cleaning up remnant files from previous runs...")
+    
+    files_to_clean = [
+        "transcriptions.json",
+        "segments.json", 
+        "processing_status.json"
+    ]
+    
+    cleaned_count = 0
+    for filename in files_to_clean:
+        file_path = Path(filename)
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                logger.info(f"🗑️  Deleted remnant file: {filename}")
+                cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"⚠️  Could not delete {filename}: {e}")
+    
+    # Clean up empty directories
+    directories_to_clean = [OUTPUT_DIR, VIDEO_SEGMENTS_DIR]
+    for directory in directories_to_clean:
+        if directory.exists():
+            try:
+                # Remove all files in directories
+                for file_path in directory.iterdir():
+                    if file_path.is_file():
+                        file_path.unlink()
+                        logger.info(f"🗑️  Deleted remnant file: {file_path}")
+                        cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"⚠️  Could not clean directory {directory}: {e}")
+    
+    if cleaned_count > 0:
+        logger.info(f"✅ Cleaned up {cleaned_count} remnant files")
+    else:
+        logger.info("✅ No remnant files found to clean")
+    
+    return cleaned_count
 
 def run_video_segment_extraction(video_path: Path) -> List[str]:
     """Run video segment extraction and return list of created video segments"""
@@ -183,6 +226,9 @@ async def extract_audio(
     logger.info(f"📁 Original filename: {video_file.filename}")
     logger.info(f"📋 Content type: {video_file.content_type}")
     logger.info(f"🆔 Request ID: {start_time.strftime('%Y%m%d_%H%M%S')}")
+    
+    # Clean up remnant files from previous runs
+    cleanup_previous_files()
     
     # Validate file upload
     if not video_file:
@@ -503,6 +549,20 @@ async def download_video_segment(filename: str):
         filename=filename,
         media_type='video/mp4'
     )
+
+@app.post("/cleanup")
+async def cleanup_files():
+    """Manually trigger cleanup of remnant files"""
+    try:
+        cleaned_count = cleanup_previous_files()
+        return {
+            "message": f"Cleanup completed successfully",
+            "files_cleaned": cleaned_count,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"❌ Error during cleanup: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during cleanup: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

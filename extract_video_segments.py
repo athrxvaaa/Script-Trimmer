@@ -13,7 +13,7 @@ def sanitize_filename(filename):
     """Convert topic title to a valid filename"""
     # Remove or replace invalid characters
     filename = re.sub(r'[<>:"/\\|?*]', '', filename)
-    # Replace spaces with underscores
+    # Replace spaces 
     filename = filename.replace(' ', '_')
     # Limit length
     if len(filename) > 100:

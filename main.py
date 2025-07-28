@@ -15,6 +15,7 @@ import uuid
 import sys
 sys.path.append(str(Path(__file__).parent))
 import transcribe_segments
+import extract_video_segments
 
 # Configure logging
 logging.basicConfig(
@@ -27,17 +28,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Audio Extraction API", description="Extract audio from video files and chunk if needed")
+app = FastAPI(title="Audio Extraction API", description="Extract audio from video files, transcribe, and create video segments")
 
 # Configuration
 UPLOAD_DIR = Path("uploads")
 OUTPUT_DIR = Path("output")
+VIDEO_SEGMENTS_DIR = Path("video_segments")
 MAX_AUDIO_SIZE_MB = 25
 CHUNK_DURATION_MINUTES = 10  # Duration of each chunk in minutes
 
 # Create directories if they don't exist
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+VIDEO_SEGMENTS_DIR.mkdir(exist_ok=True)
 
 @app.get("/")
 async def root():
@@ -50,6 +53,8 @@ async def root():
             "list_files": "/files",
             "delete_file": "/files/{filename}",
             "delete_all": "/files",
+            "list_video_segments": "/video-segments",
+            "download_video_segment": "/download-video/{filename}",
             "logs": "/logs",
             "docs": "/docs"
         }
@@ -76,10 +81,47 @@ class AudioExtractionResponse(BaseModel):
     audio_file_path: Optional[str] = None
     chunk_files: Optional[List[str]] = None
     total_chunks: Optional[int] = None
+    video_segments: Optional[List[str]] = None
+    total_video_segments: Optional[int] = None
+    segments_json_path: Optional[str] = None
+
+class VideoSegmentResponse(BaseModel):
+    filename: str
+    title: str
+    start_time: float
+    end_time: float
+    duration: float
+    size_mb: float
 
 def get_file_size_mb(file_path: Path) -> float:
     """Get file size in MB"""
     return file_path.stat().st_size / (1024 * 1024)
+
+def run_video_segment_extraction(video_path: Path) -> List[str]:
+    """Run video segment extraction and return list of created video segments"""
+    logger.info("🎬 Starting video segment extraction...")
+    
+    try:
+        # Run video segment extraction with the provided video path
+        success = extract_video_segments.create_video_segments(str(video_path))
+        
+        if not success:
+            logger.error("❌ Video segment extraction failed")
+            return []
+        
+        # Get list of created video segments
+        video_segments = []
+        if VIDEO_SEGMENTS_DIR.exists():
+            for file_path in VIDEO_SEGMENTS_DIR.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv']:
+                    video_segments.append(str(file_path))
+        
+        logger.info(f"✅ Video segment extraction completed! Created {len(video_segments)} segments")
+        return video_segments
+        
+    except Exception as e:
+        logger.error(f"❌ Error during video segment extraction: {str(e)}")
+        return []
 
 def chunk_audio(audio_path: Path, output_dir: Path, chunk_duration_minutes: int = 10) -> List[str]:
     """Split audio file into chunks"""
@@ -261,6 +303,15 @@ async def extract_audio(
             except Exception as e:
                 logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
             
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                video_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
             logger.info("=" * 60)
@@ -270,13 +321,18 @@ async def extract_audio(
             logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
             logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
             logger.info(f"✂️  Created {len(chunk_files)} chunks")
+            logger.info(f"🎬 Created {len(video_segments)} video segments")
             logger.info(f"📁 Output directory: {OUTPUT_DIR}")
+            logger.info(f"📁 Video segments directory: {VIDEO_SEGMENTS_DIR}")
             logger.info("=" * 60)
             
             return AudioExtractionResponse(
                 message=f"Audio extracted and chunked into {len(chunk_files)} parts (original size: {audio_size_mb:.2f}MB)",
                 chunk_files=chunk_files,
-                total_chunks=len(chunk_files)
+                total_chunks=len(chunk_files),
+                video_segments=video_segments,
+                total_video_segments=len(video_segments),
+                segments_json_path="segments.json"
             )
         else:
             logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
@@ -294,6 +350,15 @@ async def extract_audio(
             except Exception as e:
                 logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
 
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                video_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
             logger.info("=" * 60)
@@ -302,12 +367,16 @@ async def extract_audio(
             logger.info(f"⏱️  Total processing time: {processing_time:.2f} seconds")
             logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
             logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
+            logger.info(f"🎬 Created {len(video_segments)} video segments")
             logger.info(f"📁 Output directory: {OUTPUT_DIR}")
             logger.info("=" * 60)
             
             return AudioExtractionResponse(
                 message=f"Audio extracted successfully (size: {audio_size_mb:.2f}MB)",
-                audio_file_path=str(audio_path)
+                audio_file_path=str(audio_path),
+                video_segments=video_segments,
+                total_video_segments=len(video_segments),
+                segments_json_path="segments.json"
             )
     
     except Exception as e:
@@ -373,6 +442,67 @@ async def delete_all_files():
         if file_path.is_file() and file_path.suffix in ['.mp3', '.wav']:
             file_path.unlink()
     return {"message": "All audio files deleted successfully"}
+
+@app.get("/video-segments/")
+async def list_video_segments():
+    """List all video segments with their details"""
+    segments = []
+    
+    # Check if segments.json exists to get topic information
+    segments_json_path = Path("segments.json")
+    topic_info = {}
+    if segments_json_path.exists():
+        try:
+            import json
+            with open(segments_json_path, 'r') as f:
+                segments_data = json.load(f)
+                for i, segment in enumerate(segments_data, 1):
+                    topic_info[f"{i:02d}"] = {
+                        "title": segment.get('title', f'Unknown_Topic_{i}'),
+                        "start_time": segment.get('start_time', 0),
+                        "end_time": segment.get('end_time', 0)
+                    }
+        except Exception as e:
+            logger.error(f"Error reading segments.json: {e}")
+    
+    # List video segments
+    for file_path in VIDEO_SEGMENTS_DIR.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv']:
+            # Extract segment number from filename (e.g., "01_Topic_Name.mp4" -> "01")
+            filename = file_path.name
+            segment_number = filename.split('_')[0] if '_' in filename else "unknown"
+            
+            # Get topic info
+            topic_data = topic_info.get(segment_number, {})
+            title = topic_data.get('title', filename.replace(file_path.suffix, ''))
+            start_time = topic_data.get('start_time', 0)
+            end_time = topic_data.get('end_time', 0)
+            duration = end_time - start_time
+            
+            segments.append(VideoSegmentResponse(
+                filename=filename,
+                title=title,
+                start_time=start_time,
+                end_time=end_time,
+                duration=duration,
+                size_mb=get_file_size_mb(file_path)
+            ))
+    
+    return {"video_segments": segments, "total_segments": len(segments)}
+
+@app.get("/download-video/{filename}")
+async def download_video_segment(filename: str):
+    """Download a video segment"""
+    file_path = VIDEO_SEGMENTS_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Video segment not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type='video/mp4'
+    )
 
 if __name__ == "__main__":
     import uvicorn

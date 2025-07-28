@@ -77,21 +77,25 @@ def extract_video_segment(video_path, start_time, duration, output_path, topic_t
         print(f"  ❌ Error extracting {output_path}: {e}")
         return False, e.stderr
 
-def create_video_segments():
+def create_video_segments(video_path=None):
     """Main function to create video segments from segments.json"""
     
     # Check if segments.json exists
     if not os.path.exists(SEGMENTS_JSON):
         print(f"❌ {SEGMENTS_JSON} not found!")
-        return
+        return False
     
     # Find original video
     global ORIGINAL_VIDEO
-    ORIGINAL_VIDEO = find_original_video()
+    if video_path:
+        ORIGINAL_VIDEO = video_path
+    else:
+        ORIGINAL_VIDEO = find_original_video()
+    
     if not ORIGINAL_VIDEO:
         print("❌ No video file found in uploads/ directory or current directory!")
         print("Supported formats: .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv")
-        return
+        return False
     
     print(f"📹 Found original video: {ORIGINAL_VIDEO}")
     
@@ -147,6 +151,10 @@ def create_video_segments():
     if successful_extractions > 0:
         print(f"\n🎉 Successfully extracted {successful_extractions} video segments!")
         print(f"📂 Check the '{OUTPUT_DIR}' folder for your video segments.")
+        return True
+    else:
+        print("❌ No video segments were successfully extracted.")
+        return False
 
 def list_segments():
     """List all segments from segments.json"""

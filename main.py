@@ -436,12 +436,11 @@ async def extract_audio(
             audio_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
     
-    finally:
-        # Clean up video file
-        if video_path.exists():
-            logger.info("🗑️  Cleaning up temporary video file...")
-            video_path.unlink()
-            logger.info("✅ Temporary video file deleted")
+    # Clean up video file AFTER all processing is complete
+    if video_path.exists():
+        logger.info("🗑️  Cleaning up temporary video file...")
+        video_path.unlink()
+        logger.info("✅ Temporary video file deleted")
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):

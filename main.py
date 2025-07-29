@@ -96,6 +96,31 @@ def upload_file_to_s3(file_path: Path, s3_key: str) -> Optional[str]:
         logger.error(f"❌ Unexpected error during S3 upload: {e}")
         return None
 
+def cleanup_video_segments_after_s3_upload(video_segments: List[str]) -> int:
+    """Clean up video segments from local storage after successful S3 upload"""
+    cleaned_count = 0
+    
+    if not video_segments:
+        logger.info("ℹ️  No video segments to clean up")
+        return cleaned_count
+    
+    logger.info(f"🧹 Cleaning up {len(video_segments)} video segments from local storage...")
+    
+    for segment_path in video_segments:
+        segment_file = Path(segment_path)
+        if segment_file.exists():
+            try:
+                segment_file.unlink()
+                logger.info(f"🗑️  Deleted local video segment: {segment_file.name}")
+                cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"⚠️  Could not delete {segment_file.name}: {e}")
+        else:
+            logger.warning(f"⚠️  Video segment not found for cleanup: {segment_path}")
+    
+    logger.info(f"✅ Local video segment cleanup completed: {cleaned_count}/{len(video_segments)} segments deleted")
+    return cleaned_count
+
 def upload_video_segments_to_s3(video_segments: List[str]) -> List[dict]:
     """Upload all video segments to S3 and return their URLs"""
     s3_urls = []
@@ -128,6 +153,14 @@ def upload_video_segments_to_s3(video_segments: List[str]) -> List[dict]:
             logger.error(f"❌ Failed to upload {segment_file.name} to S3")
     
     logger.info(f"✅ S3 upload completed: {len(s3_urls)}/{len(video_segments)} segments uploaded")
+    
+    # Clean up local video segments after successful S3 upload
+    if s3_urls:
+        cleaned_count = cleanup_video_segments_after_s3_upload(video_segments)
+        logger.info(f"🎯 Final cleanup: {cleaned_count} local video segments removed after S3 upload")
+    else:
+        logger.warning("⚠️  No S3 uploads successful, keeping local video segments for debugging")
+    
     return s3_urls
 
 @app.get("/")

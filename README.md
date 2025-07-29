@@ -11,6 +11,7 @@ A FastAPI-based service that extracts audio from video files, transcribes the au
 - **Automatic video segment extraction** based on detected topics
 - **Automatic S3 upload** of video segments with direct URLs
 - **Automatic cleanup** of remnant files from previous runs
+- **Final cleanup** of local video segments after S3 upload
 - Configurable chunk duration (default: 10 minutes per chunk)
 - File management endpoints (list, download, delete)
 - Async file processing
@@ -28,7 +29,8 @@ When you upload a video file, the API automatically:
 5. **Analyze Topics** - Use GPT-4o-mini to detect topics and timestamps
 6. **Extract Video Segments** - Create video segments based on detected topics
 7. **Upload to S3** - Upload video segments to S3 with direct URLs
-8. **Return Results** - Provide audio files, transcripts, video segments, and S3 URLs
+8. **Final Cleanup** - Remove local video segments after successful S3 upload
+9. **Return Results** - Provide audio files, transcripts, and S3 URLs
 
 ## Recent Success Example
 
@@ -319,7 +321,9 @@ The API includes comprehensive error handling:
 - Transcription requires a valid OpenAI API key
 - Video segment extraction requires the original video file to be available
 - **Automatic cleanup** runs at the start of each new processing request
+- **Final cleanup** removes local video segments after successful S3 upload
 - **Manual cleanup** endpoint available for maintenance
+- **Final state:** Only S3 URLs remain; all local files are cleaned up
 
 ## Performance
 

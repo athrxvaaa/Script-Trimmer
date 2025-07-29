@@ -15,6 +15,8 @@ import uuid
 import sys
 import boto3
 from botocore.exceptions import ClientError
+import yt_dlp
+import re
 sys.path.append(str(Path(__file__).parent))
 import transcribe_segments
 import extract_video_segments
@@ -163,6 +165,297 @@ def upload_video_segments_to_s3(video_segments: List[str]) -> List[dict]:
     
     return s3_urls
 
+def is_valid_youtube_url(url: str) -> bool:
+    """Check if the URL is a valid YouTube URL"""
+    youtube_patterns = [
+        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/v/[\w-]+'
+    ]
+    
+    for pattern in youtube_patterns:
+        if re.match(pattern, url):
+            return True
+    return False
+
+def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]:
+    """Download YouTube video and return the file path"""
+    try:
+        logger.info(f"📥 Starting YouTube video download: {youtube_url}")
+        
+        # Configure yt-dlp options
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',  # Prefer MP4, fallback to best available
+            'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+            'quiet': False,
+            'no_warnings': False,
+            'extract_flat': False,
+            'writeinfojson': False,
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+            'ignoreerrors': False,
+            'no_color': True,
+            'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None]
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Get video info first
+            logger.info("🔍 Fetching video information...")
+            info = ydl.extract_info(youtube_url, download=False)
+            video_title = info.get('title', 'Unknown Title')
+            duration = info.get('duration', 0)
+            
+            logger.info(f"📹 Video Title: {video_title}")
+            logger.info(f"⏱️  Duration: {duration} seconds")
+            
+            # Download the video
+            logger.info("⬇️  Downloading video...")
+            ydl.download([youtube_url])
+            
+            # Find the downloaded file
+            downloaded_files = list(output_dir.glob(f"{video_title}.*"))
+            if not downloaded_files:
+                # Try alternative search patterns
+                downloaded_files = list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.webm")) + list(output_dir.glob("*.mkv"))
+            
+            if downloaded_files:
+                video_path = downloaded_files[0]
+                file_size_mb = get_file_size_mb(video_path)
+                logger.info(f"✅ YouTube video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
+                return video_path
+            else:
+                logger.error("❌ Downloaded video file not found")
+                return None
+                
+    except Exception as e:
+        logger.error(f"❌ Error downloading YouTube video: {str(e)}")
+        return None
+
+def process_youtube_video(youtube_url: str) -> dict:
+    """Process YouTube video through the complete pipeline"""
+    start_time = datetime.now()
+    logger.info("=" * 60)
+    logger.info("🚀 NEW YOUTUBE VIDEO PROCESSING REQUEST")
+    logger.info("=" * 60)
+    logger.info(f"📺 YouTube URL: {youtube_url}")
+    logger.info(f"🆔 Request ID: {start_time.strftime('%Y%m%d_%H%M%S')}")
+    
+    # Clean up remnant files from previous runs
+    cleanup_previous_files()
+    
+    # Validate YouTube URL
+    if not is_valid_youtube_url(youtube_url):
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL provided")
+    
+    try:
+        # Download YouTube video
+        video_path = download_youtube_video(youtube_url, UPLOAD_DIR)
+        if not video_path:
+            raise HTTPException(status_code=500, detail="Failed to download YouTube video")
+        
+        # Get video file size
+        video_size_mb = get_file_size_mb(video_path)
+        logger.info(f"✅ Video file ready: {video_size_mb:.2f}MB")
+        
+        # Extract audio using ffmpeg
+        logger.info("🎵 Starting audio extraction from YouTube video...")
+        try:
+            # First, probe the input file to get the audio codec
+            logger.info("🔍 Probing video file for audio codec...")
+            probe_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'a:0',
+                '-show_entries', 'stream=codec_name',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
+            ]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            audio_codec = probe_result.stdout.strip()
+            logger.info(f"🎼 Detected audio codec: {audio_codec}")
+            
+            # Map codec to extension
+            codec_ext = {'aac': 'aac', 'mp3': 'mp3', 'wav': 'wav', 'flac': 'flac', 'opus': 'opus', 'm4a': 'm4a', 'ogg': 'ogg'}
+            out_ext = codec_ext.get(audio_codec, 'audio')
+            file_id = str(uuid.uuid4())
+            audio_filename = f"{file_id}_youtube_audio.{out_ext}"
+            audio_path = OUTPUT_DIR / audio_filename
+            logger.info(f"📄 Audio will be saved as: {audio_filename}")
+            
+            # Extract audio using FFmpeg
+            logger.info("⚡ Extracting audio using FFmpeg...")
+            cmd_copy = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-vn',
+                '-acodec', 'copy',
+                '-y',
+                str(audio_path)
+            ]
+            result_copy = subprocess.run(cmd_copy, capture_output=True, text=True)
+            
+            if result_copy.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
+                logger.error(f"❌ FFmpeg extraction failed: {result_copy.stderr}")
+                raise HTTPException(status_code=500, detail=f"FFmpeg error: {result_copy.stderr}")
+            
+            # Get extracted audio file size
+            audio_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            logger.info(f"✅ Audio extraction completed successfully: {audio_size_mb:.2f}MB")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Error extracting audio: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error extracting audio: {str(e)}")
+        
+        # Check if audio file needs chunking
+        audio_size_mb = get_file_size_mb(audio_path)
+        logger.info(f"📊 Audio file size: {audio_size_mb:.2f}MB (max before chunking: {MAX_AUDIO_SIZE_MB}MB)")
+        
+        if audio_size_mb > MAX_AUDIO_SIZE_MB:
+            logger.info(f"✂️  Audio file exceeds {MAX_AUDIO_SIZE_MB}MB, starting chunking process...")
+            # Create chunks
+            chunk_files = chunk_audio(audio_path, OUTPUT_DIR, CHUNK_DURATION_MINUTES)
+            
+            # Clean up original large audio file
+            logger.info("🗑️  Cleaning up original large audio file...")
+            audio_path.unlink()
+            logger.info("✅ Original audio file deleted")
+            
+            # After chunking, run transcription and topic analysis
+            logger.info("📝 Starting transcription and topic analysis...")
+            try:
+                audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
+                logger.info("✅ Transcription completed. Now analyzing topics...")
+                segment_json = transcribe_segments.create_segment_json(audio_files)
+                with open("segments.json", "w") as f:
+                    import json
+                    json.dump(segment_json, f, indent=2)
+                logger.info("✅ Topic analysis and segment creation completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
+            
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                video_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+                
+                # Clean up intermediate files after successful video segment extraction
+                if video_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+
+            # Upload video segments to S3
+            s3_urls = []
+            if video_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(video_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            logger.info("=" * 60)
+            logger.info("🎉 YOUTUBE VIDEO PROCESSING COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            logger.info(f"⏱️  Total processing time: {processing_time:.2f} seconds")
+            logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
+            logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
+            logger.info(f"✂️  Created {len(chunk_files)} chunks")
+            logger.info(f"🎬 Created {len(video_segments)} video segments")
+            logger.info(f"☁️  Uploaded {len(s3_urls)} segments to S3")
+            logger.info("=" * 60)
+            
+            return {
+                "message": f"YouTube video processed successfully. Audio chunked into {len(chunk_files)} parts (original size: {audio_size_mb:.2f}MB)",
+                "youtube_url": youtube_url,
+                "chunk_files": chunk_files,
+                "total_chunks": len(chunk_files),
+                "video_segments": video_segments,
+                "total_video_segments": len(video_segments),
+                "segments_json_path": "segments.json",
+                "s3_urls": s3_urls,
+                "processing_time_seconds": processing_time
+            }
+        else:
+            logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
+            
+            # After chunking, run transcription and topic analysis
+            logger.info("📝 Starting transcription and topic analysis...")
+            try:
+                audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
+                logger.info("✅ Transcription completed. Now analyzing topics...")
+                segment_json = transcribe_segments.create_segment_json(audio_files)
+                with open("segments.json", "w") as f:
+                    import json
+                    json.dump(segment_json, f, indent=2)
+                logger.info("✅ Topic analysis and segment creation completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
+
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                video_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+                
+                # Clean up intermediate files after successful video segment extraction
+                if video_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+
+            # Upload video segments to S3
+            s3_urls = []
+            if video_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(video_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            logger.info("=" * 60)
+            logger.info("🎉 YOUTUBE VIDEO PROCESSING COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            logger.info(f"⏱️  Total processing time: {processing_time:.2f} seconds")
+            logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
+            logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
+            logger.info(f"🎬 Created {len(video_segments)} video segments")
+            logger.info(f"☁️  Uploaded {len(s3_urls)} segments to S3")
+            logger.info("=" * 60)
+            
+            return {
+                "message": f"YouTube video processed successfully (audio size: {audio_size_mb:.2f}MB)",
+                "youtube_url": youtube_url,
+                "audio_file_path": str(audio_path),
+                "video_segments": video_segments,
+                "total_video_segments": len(video_segments),
+                "segments_json_path": "segments.json",
+                "s3_urls": s3_urls,
+                "processing_time_seconds": processing_time
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ Error processing YouTube video: {str(e)}")
+        # Clean up files on error
+        if 'video_path' in locals() and video_path.exists():
+            logger.info("🗑️  Cleaning up video file due to error...")
+            video_path.unlink()
+        if 'audio_path' in locals() and audio_path.exists():
+            logger.info("🗑️  Cleaning up audio file due to error...")
+            audio_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error processing YouTube video: {str(e)}")
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -174,11 +467,12 @@ async def root():
             "list_files": "/files",
             "delete_file": "/files/{filename}",
             "delete_all": "/files",
-            "list_video_segments": "/video-segments",
-            "download_video_segment": "/download-video/{filename}",
-            "cleanup": "/cleanup",
-            "logs": "/logs",
-            "docs": "/docs"
+                    "list_video_segments": "/video-segments",
+        "download_video_segment": "/download-video/{filename}",
+        "process_youtube": "/process-youtube",
+        "cleanup": "/cleanup",
+        "logs": "/logs",
+        "docs": "/docs"
         }
     }
 
@@ -215,6 +509,21 @@ class VideoSegmentResponse(BaseModel):
     end_time: float
     duration: float
     size_mb: float
+
+class YouTubeProcessRequest(BaseModel):
+    youtube_url: str
+
+class YouTubeProcessResponse(BaseModel):
+    message: str
+    youtube_url: str
+    audio_file_path: Optional[str] = None
+    chunk_files: Optional[List[str]] = None
+    total_chunks: Optional[int] = None
+    video_segments: Optional[List[str]] = None
+    total_video_segments: Optional[int] = None
+    segments_json_path: Optional[str] = None
+    s3_urls: Optional[List[dict]] = None
+    processing_time_seconds: float
 
 def get_file_size_mb(file_path: Path) -> float:
     """Get file size in MB"""
@@ -639,6 +948,20 @@ async def extract_audio(
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
     
     # Note: Video file cleanup is now handled in cleanup_intermediate_files() after video segment extraction
+
+@app.post("/process-youtube", response_model=YouTubeProcessResponse)
+async def process_youtube_endpoint(request: YouTubeProcessRequest):
+    """
+    Process YouTube video URL through the complete pipeline
+    """
+    try:
+        result = process_youtube_video(request.youtube_url)
+        return YouTubeProcessResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in YouTube processing endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):

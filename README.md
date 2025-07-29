@@ -12,6 +12,7 @@ A FastAPI-based service that extracts audio from video files, transcribes the au
 - **Automatic S3 upload** of video segments with direct URLs
 - **Automatic cleanup** of remnant files from previous runs
 - **Final cleanup** of local video segments after S3 upload
+- **YouTube video processing** with automatic download and processing
 - Configurable chunk duration (default: 10 minutes per chunk)
 - File management endpoints (list, download, delete)
 - Async file processing
@@ -23,14 +24,15 @@ A FastAPI-based service that extracts audio from video files, transcribes the au
 When you upload a video file, the API automatically:
 
 1. **Clean Previous Files** - Remove any remnant files from previous runs
-2. **Extract Audio** - Extract audio from the video file
-3. **Chunk Audio** - Split large audio files into smaller chunks (if needed)
-4. **Transcribe** - Transcribe audio using OpenAI Whisper API
-5. **Analyze Topics** - Use GPT-4o-mini to detect topics and timestamps
-6. **Extract Video Segments** - Create video segments based on detected topics
-7. **Upload to S3** - Upload video segments to S3 with direct URLs
-8. **Final Cleanup** - Remove local video segments after successful S3 upload
-9. **Return Results** - Provide audio files, transcripts, and S3 URLs
+2. **Download Video** - Download YouTube video (for YouTube URLs only)
+3. **Extract Audio** - Extract audio from the video file
+4. **Chunk Audio** - Split large audio files into smaller chunks (if needed)
+5. **Transcribe** - Transcribe audio using OpenAI Whisper API
+6. **Analyze Topics** - Use GPT-4o-mini to detect topics and timestamps
+7. **Extract Video Segments** - Create video segments based on detected topics
+8. **Upload to S3** - Upload video segments to S3 with direct URLs
+9. **Final Cleanup** - Remove local video segments after successful S3 upload
+10. **Return Results** - Provide audio files, transcripts, and S3 URLs
 
 ## Recent Success Example
 
@@ -84,6 +86,47 @@ The API will be available at `http://localhost:8000`
 
 Upload a video file to extract its audio, transcribe it, analyze topics, and create video segments.
 
+### 2. Process YouTube Video (Full Pipeline)
+
+**POST** `/process-youtube`
+
+Process a YouTube video URL through the complete pipeline (download, extract audio, transcribe, analyze topics, create video segments, upload to S3).
+
+**Request:**
+```json
+{
+  "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+}
+```
+
+**Response Example:**
+```json
+{
+  "message": "YouTube video processed successfully. Audio chunked into 9 parts (original size: 79.73MB)",
+  "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "chunk_files": [
+    "output/chunk_001_audio.mp3",
+    "output/chunk_002_audio.mp3"
+  ],
+  "total_chunks": 9,
+  "video_segments": [
+    "video_segments/01_Introduction_and_Audio_Check.mp4",
+    "video_segments/02_Discussion_on_Props_and_Event_Handling.mp4"
+  ],
+  "total_video_segments": 32,
+  "segments_json_path": "segments.json",
+  "s3_urls": [
+    {
+      "filename": "01_Introduction_and_Audio_Check.mp4",
+      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "s3_key": "video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "size_mb": 15.2
+    }
+  ],
+  "processing_time_seconds": 477.5
+}
+```
+
 **Request:**
 
 - Content-Type: `multipart/form-data`
@@ -127,31 +170,31 @@ Upload a video file to extract its audio, transcribe it, analyze topics, and cre
 }
 ```
 
-### 2. Download Audio File
+### 3. Download Audio File
 
 **GET** `/download/{filename}`
 
 Download an extracted audio file or chunk.
 
-### 3. List Audio Files
+### 4. List Audio Files
 
 **GET** `/files/`
 
 List all extracted audio files with their sizes.
 
-### 4. Delete Audio File
+### 5. Delete Audio File
 
 **DELETE** `/files/{filename}`
 
 Delete a specific audio file.
 
-### 5. Delete All Audio Files
+### 6. Delete All Audio Files
 
 **DELETE** `/files/`
 
 Delete all extracted audio files.
 
-### 6. List Video Segments
+### 7. List Video Segments
 
 **GET** `/video-segments/`
 
@@ -183,13 +226,13 @@ List all video segments with their details including topic titles, timestamps, a
 }
 ```
 
-### 7. Download Video Segment
+### 8. Download Video Segment
 
 **GET** `/download-video/{filename}`
 
 Download a specific video segment file.
 
-### 8. Manual Cleanup
+### 9. Manual Cleanup
 
 **POST** `/cleanup`
 
@@ -251,7 +294,20 @@ You can modify these settings in the `extract_audio` function in `main.py`.
    - Key: `video_file` (type: File)
    - Value: Select your video file
 
-2. **Download Audio File:**
+2. **Process YouTube Video (Full Pipeline):**
+
+   - Method: POST
+   - URL: `http://localhost:8000/process-youtube`
+   - Body: raw (JSON)
+   - Content-Type: `application/json`
+   - Body:
+     ```json
+     {
+       "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+     }
+     ```
+
+3. **Download Audio File:**
 
    - Method: GET
    - URL: `http://localhost:8000/download/{filename}`
@@ -300,6 +356,17 @@ The API supports all video formats that FFmpeg supports, including:
 - And many more formats supported by FFmpeg
 
 FFmpeg provides excellent format compatibility and high-quality audio extraction.
+
+## Supported YouTube URL Formats
+
+The API supports various YouTube URL formats:
+
+- `https://www.youtube.com/watch?v=VIDEO_ID`
+- `https://youtu.be/VIDEO_ID`
+- `https://www.youtube.com/embed/VIDEO_ID`
+- `https://www.youtube.com/v/VIDEO_ID`
+
+The system automatically downloads the best available quality and processes it through the complete pipeline.
 
 ## Error Handling
 

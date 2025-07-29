@@ -188,9 +188,9 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
         file_id = str(uuid.uuid4())
         output_filename = f"{file_id}_youtube_video.%(ext)s"
         
-        # Configure yt-dlp options with better format selection
+        # Configure yt-dlp options with updated settings for current YouTube API
         ydl_opts = {
-            'format': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best[ext=webm]/best',  # More fallbacks
+            'format': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best[ext=webm]/best',
             'outtmpl': str(output_dir / output_filename),
             'quiet': False,
             'no_warnings': False,
@@ -200,18 +200,24 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
             'writeautomaticsub': False,
             'ignoreerrors': False,
             'no_color': True,
-            'nocheckcertificate': True,  # Skip certificate verification
+            'nocheckcertificate': True,
             'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None],
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    'player_client': ['web', 'android', 'mweb'],
                     'player_skip': ['webpage', 'configs'],
+                    'skip': ['dash', 'hls'],
                 }
             },
-            'format_sort': ['res:720', 'ext:mp4:m4a', 'hasvid', 'hasaud'],  # Better format sorting
+            'format_sort': ['res:720', 'ext:mp4:m4a', 'hasvid', 'hasaud'],
             'format_sort_force': True,
-            'prefer_insecure': True,  # Try insecure connections if secure fails
-            'geo_bypass': True,  # Bypass geo-restrictions
+            'prefer_insecure': True,
+            'geo_bypass': True,
+            'cookiesfrombrowser': None,  # Don't use cookies
+            'no_check_certificate': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -229,11 +235,21 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                 formats = info.get('formats', [])
                 video_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('vcodec') is not None]
                 
+                # Filter out image-only formats (like thumbnails)
+                video_formats = [f for f in video_formats if f.get('format_id') != 'sb0' and not f.get('format_note', '').startswith('storyboard')]
+                
                 if not video_formats:
                     logger.error("❌ No video formats available for download")
+                    logger.error("Available formats:")
+                    for fmt in formats[:5]:  # Show first 5 formats for debugging
+                        logger.error(f"  - {fmt.get('format_id', 'N/A')}: {fmt.get('format_note', 'N/A')} (vcodec: {fmt.get('vcodec', 'N/A')})")
                     raise Exception("No video formats available - video might be restricted or private")
                 
                 logger.info(f"✅ Found {len(video_formats)} video formats available")
+                
+                # Log available video formats for debugging
+                for fmt in video_formats[:3]:  # Show first 3 video formats
+                    logger.info(f"  📹 {fmt.get('format_id', 'N/A')}: {fmt.get('format_note', 'N/A')} ({fmt.get('ext', 'N/A')})")
                 
             except Exception as e:
                 logger.warning(f"⚠️  Could not fetch video info: {e}")
@@ -253,7 +269,7 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                 
                 # Try alternative configuration with different format selection
                 ydl_opts_alt = {
-                    'format': 'best[ext=mp4]/best[ext=webm]/best',  # More specific format selection
+                    'format': 'best[ext=mp4]/best[ext=webm]/best',
                     'outtmpl': str(output_dir / output_filename),
                     'quiet': False,
                     'no_warnings': False,
@@ -267,12 +283,18 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                     'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None],
                     'extractor_args': {
                         'youtube': {
-                            'player_client': ['web', 'android'],  # Try web first
+                            'player_client': ['mweb', 'web', 'android'],
                             'player_skip': ['webpage', 'configs'],
+                            'skip': ['dash', 'hls'],
                         }
                     },
                     'prefer_insecure': True,
                     'geo_bypass': True,
+                    'cookiesfrombrowser': None,
+                    'no_check_certificate': True,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
                 }
                 
                 try:
@@ -350,6 +372,18 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                 
                 downloaded_files = sorted(recent_files, key=lambda x: x.stat().st_mtime, reverse=True)
                 logger.info(f"📁 Found {len(downloaded_files)} recently modified files")
+            
+            # If still no files, check for any files with similar names (in case extension changed)
+            if not downloaded_files:
+                logger.info("🔍 Checking for files with similar names...")
+                base_name = file_id.replace('-', '')  # Remove hyphens for broader search
+                for search_dir in [output_dir, Path(".")]:
+                    for file_path in search_dir.iterdir():
+                        if file_path.is_file() and base_name in file_path.name:
+                            downloaded_files.append(file_path)
+                
+                downloaded_files = sorted(downloaded_files, key=lambda x: x.stat().st_mtime, reverse=True)
+                logger.info(f"📁 Found {len(downloaded_files)} files with similar names")
             
             if downloaded_files:
                 video_path = downloaded_files[0]

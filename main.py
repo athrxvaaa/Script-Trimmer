@@ -13,6 +13,8 @@ from pydub import AudioSegment
 import tempfile
 import uuid
 import sys
+import boto3
+from botocore.exceptions import ClientError
 sys.path.append(str(Path(__file__).parent))
 import transcribe_segments
 import extract_video_segments
@@ -41,6 +43,92 @@ CHUNK_DURATION_MINUTES = 10  # Duration of each chunk in minutes
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 VIDEO_SEGMENTS_DIR.mkdir(exist_ok=True)
+
+# S3 Configuration
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "lisa-research")
+S3_REGION = os.getenv("S3_REGION", "ap-south-1")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
+
+def get_s3_client():
+    """Get S3 client with credentials from environment variables"""
+    if not S3_ACCESS_KEY or not S3_SECRET_KEY:
+        logger.warning("⚠️  S3 credentials not found in environment variables")
+        return None
+    
+    try:
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=S3_ACCESS_KEY,
+            aws_secret_access_key=S3_SECRET_KEY,
+            region_name=S3_REGION
+        )
+        return s3_client
+    except Exception as e:
+        logger.error(f"❌ Failed to create S3 client: {e}")
+        return None
+
+def upload_file_to_s3(file_path: Path, s3_key: str) -> Optional[str]:
+    """Upload a file to S3 and return the URL"""
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.error("❌ S3 client not available")
+        return None
+    
+    try:
+        logger.info(f"📤 Uploading {file_path.name} to S3...")
+        s3_client.upload_file(
+            str(file_path),
+            S3_BUCKET_NAME,
+            s3_key,
+            ExtraArgs={'ContentType': 'video/mp4'}
+        )
+        
+        # Generate the S3 URL
+        s3_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{s3_key}"
+        logger.info(f"✅ Successfully uploaded to S3: {s3_url}")
+        return s3_url
+        
+    except ClientError as e:
+        logger.error(f"❌ S3 upload failed for {file_path.name}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Unexpected error during S3 upload: {e}")
+        return None
+
+def upload_video_segments_to_s3(video_segments: List[str]) -> List[dict]:
+    """Upload all video segments to S3 and return their URLs"""
+    s3_urls = []
+    
+    if not video_segments:
+        logger.warning("⚠️  No video segments to upload")
+        return s3_urls
+    
+    logger.info(f"🚀 Starting S3 upload for {len(video_segments)} video segments...")
+    
+    for segment_path in video_segments:
+        segment_file = Path(segment_path)
+        if not segment_file.exists():
+            logger.warning(f"⚠️  Video segment not found: {segment_path}")
+            continue
+        
+        # Create S3 key with timestamp to avoid conflicts
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        s3_key = f"video-segments/{timestamp}_{segment_file.name}"
+        
+        s3_url = upload_file_to_s3(segment_file, s3_key)
+        if s3_url:
+            s3_urls.append({
+                "filename": segment_file.name,
+                "s3_url": s3_url,
+                "s3_key": s3_key,
+                "size_mb": get_file_size_mb(segment_file)
+            })
+        else:
+            logger.error(f"❌ Failed to upload {segment_file.name} to S3")
+    
+    logger.info(f"✅ S3 upload completed: {len(s3_urls)}/{len(video_segments)} segments uploaded")
+    return s3_urls
 
 @app.get("/")
 async def root():
@@ -85,6 +173,7 @@ class AudioExtractionResponse(BaseModel):
     video_segments: Optional[List[str]] = None
     total_video_segments: Optional[int] = None
     segments_json_path: Optional[str] = None
+    s3_urls: Optional[List[dict]] = None
 
 class VideoSegmentResponse(BaseModel):
     filename: str
@@ -429,13 +518,21 @@ async def extract_audio(
             logger.info(f"📁 Video segments directory: {VIDEO_SEGMENTS_DIR}")
             logger.info("=" * 60)
             
+            # Upload video segments to S3
+            s3_urls = []
+            if video_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(video_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
             return AudioExtractionResponse(
                 message=f"Audio extracted and chunked into {len(chunk_files)} parts (original size: {audio_size_mb:.2f}MB)",
                 chunk_files=chunk_files,
                 total_chunks=len(chunk_files),
                 video_segments=video_segments,
                 total_video_segments=len(video_segments),
-                segments_json_path="segments.json"
+                segments_json_path="segments.json",
+                s3_urls=s3_urls
             )
         else:
             logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
@@ -481,12 +578,20 @@ async def extract_audio(
             logger.info(f"📁 Output directory: {OUTPUT_DIR}")
             logger.info("=" * 60)
             
+            # Upload video segments to S3
+            s3_urls = []
+            if video_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(video_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
             return AudioExtractionResponse(
                 message=f"Audio extracted successfully (size: {audio_size_mb:.2f}MB)",
                 audio_file_path=str(audio_path),
                 video_segments=video_segments,
                 total_video_segments=len(video_segments),
-                segments_json_path="segments.json"
+                segments_json_path="segments.json",
+                s3_urls=s3_urls
             )
     
     except Exception as e:

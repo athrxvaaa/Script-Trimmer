@@ -9,6 +9,7 @@ A FastAPI-based service that extracts audio from video files, transcribes the au
 - **Automatic transcription** using OpenAI Whisper API
 - **Topic analysis and segmentation** using GPT-4o-mini
 - **Automatic video segment extraction** based on detected topics
+- **Automatic S3 upload** of video segments with direct URLs
 - **Automatic cleanup** of remnant files from previous runs
 - Configurable chunk duration (default: 10 minutes per chunk)
 - File management endpoints (list, download, delete)
@@ -26,7 +27,8 @@ When you upload a video file, the API automatically:
 4. **Transcribe** - Transcribe audio using OpenAI Whisper API
 5. **Analyze Topics** - Use GPT-4o-mini to detect topics and timestamps
 6. **Extract Video Segments** - Create video segments based on detected topics
-7. **Return Results** - Provide audio files, transcripts, and video segments
+7. **Upload to S3** - Upload video segments to S3 with direct URLs
+8. **Return Results** - Provide audio files, transcripts, video segments, and S3 URLs
 
 ## Recent Success Example
 
@@ -105,7 +107,21 @@ Upload a video file to extract its audio, transcribe it, analyze topics, and cre
     "video_segments/03_Understanding_Prop_Drilling.mp4"
   ],
   "total_video_segments": 32,
-  "segments_json_path": "segments.json"
+  "segments_json_path": "segments.json",
+  "s3_urls": [
+    {
+      "filename": "01_Introduction_and_Audio_Check.mp4",
+      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "s3_key": "video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "size_mb": 15.2
+    },
+    {
+      "filename": "02_Discussion_on_Props_and_Event_Handling.mp4",
+      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/20241201_143022_02_Discussion_on_Props_and_Event_Handling.mp4",
+      "s3_key": "video-segments/20241201_143022_02_Discussion_on_Props_and_Event_Handling.mp4",
+      "size_mb": 22.8
+    }
+  ]
 }
 ```
 
@@ -188,6 +204,25 @@ Manually trigger cleanup of remnant files from previous processing runs.
 ```
 
 ## Configuration
+
+### Environment Variables
+
+Create a `.env` file in the project root with the following variables:
+
+```bash
+# OpenAI API Key (required for transcription)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# S3 Configuration (required for video segment upload)
+S3_ACCESS_KEY=your_s3_access_key_here
+S3_SECRET_KEY=your_s3_secret_key_here
+S3_BUCKET_NAME=lisa-research
+S3_REGION=ap-south-1
+```
+
+**Note:** The S3 credentials you provided will be used to upload video segments to the `lisa-research` bucket in the `ap-south-1` region.
+
+### Application Settings
 
 You can modify the following constants in `main.py`:
 

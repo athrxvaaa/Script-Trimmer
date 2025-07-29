@@ -184,10 +184,14 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
     try:
         logger.info(f"📥 Starting YouTube video download: {youtube_url}")
         
-        # Configure yt-dlp options
+        # Generate a unique filename to avoid conflicts
+        file_id = str(uuid.uuid4())
+        output_filename = f"{file_id}_youtube_video.%(ext)s"
+        
+        # Configure yt-dlp options with better format selection
         ydl_opts = {
-            'format': 'best[ext=mp4]/best',  # Prefer MP4, fallback to best available
-            'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+            'format': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',  # Prefer 720p or lower MP4
+            'outtmpl': str(output_dir / output_filename),
             'quiet': False,
             'no_warnings': False,
             'extract_flat': False,
@@ -196,36 +200,86 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
             'writeautomaticsub': False,
             'ignoreerrors': False,
             'no_color': True,
-            'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None]
+            'nocheckcertificate': True,  # Skip certificate verification
+            'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None],
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage', 'configs'],
+                }
+            }
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Get video info first
             logger.info("🔍 Fetching video information...")
-            info = ydl.extract_info(youtube_url, download=False)
-            video_title = info.get('title', 'Unknown Title')
-            duration = info.get('duration', 0)
-            
-            logger.info(f"📹 Video Title: {video_title}")
-            logger.info(f"⏱️  Duration: {duration} seconds")
+            try:
+                info = ydl.extract_info(youtube_url, download=False)
+                video_title = info.get('title', 'Unknown Title')
+                duration = info.get('duration', 0)
+                
+                logger.info(f"📹 Video Title: {video_title}")
+                logger.info(f"⏱️  Duration: {duration} seconds")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not fetch video info: {e}")
+                video_title = "Unknown Title"
+                duration = 0
             
             # Download the video
             logger.info("⬇️  Downloading video...")
             ydl.download([youtube_url])
             
-            # Find the downloaded file
-            downloaded_files = list(output_dir.glob(f"{video_title}.*"))
+            # Find the downloaded file with better search logic
+            logger.info("🔍 Searching for downloaded video file...")
+            
+            # First, try to find files with our unique ID
+            downloaded_files = list(output_dir.glob(f"{file_id}_youtube_video.*"))
+            
             if not downloaded_files:
-                # Try alternative search patterns
-                downloaded_files = list(output_dir.glob("*.mp4")) + list(output_dir.glob("*.webm")) + list(output_dir.glob("*.mkv"))
+                # Try to find any video files that were recently created
+                video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv']
+                all_files = []
+                for ext in video_extensions:
+                    all_files.extend(list(output_dir.glob(f"*{ext}")))
+                
+                # Sort by modification time (newest first)
+                downloaded_files = sorted(all_files, key=lambda x: x.stat().st_mtime, reverse=True)
+                logger.info(f"📁 Found {len(downloaded_files)} potential video files")
             
             if downloaded_files:
                 video_path = downloaded_files[0]
                 file_size_mb = get_file_size_mb(video_path)
                 logger.info(f"✅ YouTube video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
-                return video_path
+                
+                # Verify it's actually a video file by checking if ffprobe can read it
+                try:
+                    probe_cmd = [
+                        'ffprobe',
+                        '-v', 'error',
+                        '-select_streams', 'v:0',
+                        '-show_entries', 'stream=codec_type',
+                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                        str(video_path)
+                    ]
+                    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                    if probe_result.returncode == 0 and 'video' in probe_result.stdout:
+                        logger.info("✅ Verified downloaded file is a valid video")
+                        return video_path
+                    else:
+                        logger.warning("⚠️  Downloaded file doesn't appear to be a valid video")
+                        # Try the next file if available
+                        if len(downloaded_files) > 1:
+                            video_path = downloaded_files[1]
+                            logger.info(f"🔄 Trying alternative file: {video_path.name}")
+                            return video_path
+                except Exception as e:
+                    logger.warning(f"⚠️  Could not verify video file: {e}")
+                    return video_path
             else:
-                logger.error("❌ Downloaded video file not found")
+                logger.error("❌ No video files found after download")
+                # List all files in the directory for debugging
+                all_files = list(output_dir.iterdir())
+                logger.info(f"📁 All files in uploads directory: {[f.name for f in all_files]}")
                 return None
                 
     except Exception as e:
@@ -251,8 +305,8 @@ def process_youtube_video(youtube_url: str) -> dict:
     try:
         # Download YouTube video
         video_path = download_youtube_video(youtube_url, UPLOAD_DIR)
-        if not video_path:
-            raise HTTPException(status_code=500, detail="Failed to download YouTube video")
+        if not video_path or not video_path.exists():
+            raise HTTPException(status_code=500, detail="Failed to download YouTube video or video file not found")
         
         # Get video file size
         video_size_mb = get_file_size_mb(video_path)

@@ -190,7 +190,7 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
         
         # Configure yt-dlp options with better format selection
         ydl_opts = {
-            'format': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best',  # Prefer 720p or lower MP4
+            'format': 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best[ext=webm]/best',  # More fallbacks
             'outtmpl': str(output_dir / output_filename),
             'quiet': False,
             'no_warnings': False,
@@ -207,7 +207,11 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                     'player_client': ['android', 'web'],
                     'player_skip': ['webpage', 'configs'],
                 }
-            }
+            },
+            'format_sort': ['res:720', 'ext:mp4:m4a', 'hasvid', 'hasaud'],  # Better format sorting
+            'format_sort_force': True,
+            'prefer_insecure': True,  # Try insecure connections if secure fails
+            'geo_bypass': True,  # Bypass geo-restrictions
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -220,6 +224,17 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
                 
                 logger.info(f"📹 Video Title: {video_title}")
                 logger.info(f"⏱️  Duration: {duration} seconds")
+                
+                # Check if video is downloadable
+                formats = info.get('formats', [])
+                video_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('vcodec') is not None]
+                
+                if not video_formats:
+                    logger.error("❌ No video formats available for download")
+                    raise Exception("No video formats available - video might be restricted or private")
+                
+                logger.info(f"✅ Found {len(video_formats)} video formats available")
+                
             except Exception as e:
                 logger.warning(f"⚠️  Could not fetch video info: {e}")
                 video_title = "Unknown Title"
@@ -227,24 +242,114 @@ def download_youtube_video(youtube_url: str, output_dir: Path) -> Optional[Path]
             
             # Download the video
             logger.info("⬇️  Downloading video...")
-            ydl.download([youtube_url])
+            download_success = False
+            
+            try:
+                ydl.download([youtube_url])
+                download_success = True
+            except Exception as e:
+                logger.warning(f"⚠️  First download attempt failed: {e}")
+                logger.info("🔄 Trying alternative download configuration...")
+                
+                # Try alternative configuration with different format selection
+                ydl_opts_alt = {
+                    'format': 'best[ext=mp4]/best[ext=webm]/best',  # More specific format selection
+                    'outtmpl': str(output_dir / output_filename),
+                    'quiet': False,
+                    'no_warnings': False,
+                    'extract_flat': False,
+                    'writeinfojson': False,
+                    'writesubtitles': False,
+                    'writeautomaticsub': False,
+                    'ignoreerrors': False,
+                    'no_color': True,
+                    'nocheckcertificate': True,
+                    'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None],
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['web', 'android'],  # Try web first
+                            'player_skip': ['webpage', 'configs'],
+                        }
+                    },
+                    'prefer_insecure': True,
+                    'geo_bypass': True,
+                }
+                
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts_alt) as ydl_alt:
+                        ydl_alt.download([youtube_url])
+                        download_success = True
+                except Exception as e2:
+                    logger.warning(f"⚠️  Second download attempt failed: {e2}")
+                    
+                    # Try one more time with minimal options
+                    logger.info("🔄 Trying minimal download configuration...")
+                    ydl_opts_minimal = {
+                        'format': 'best',
+                        'outtmpl': str(output_dir / output_filename),
+                        'quiet': False,
+                        'no_warnings': False,
+                        'no_color': True,
+                        'nocheckcertificate': True,
+                        'progress_hooks': [lambda d: logger.info(f"📥 Download progress: {d.get('_percent_str', 'N/A')}") if d['status'] == 'downloading' else None],
+                    }
+                    
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts_minimal) as ydl_min:
+                            ydl_min.download([youtube_url])
+                            download_success = True
+                    except Exception as e3:
+                        logger.error(f"❌ All download attempts failed: {e3}")
+                        raise Exception(f"Failed to download video after 3 attempts: {e3}")
+            
+            if not download_success:
+                raise Exception("No successful download attempts")
             
             # Find the downloaded file with better search logic
             logger.info("🔍 Searching for downloaded video file...")
             
             # First, try to find files with our unique ID
             downloaded_files = list(output_dir.glob(f"{file_id}_youtube_video.*"))
+            logger.info(f"📁 Found {len(downloaded_files)} files with unique ID")
             
             if not downloaded_files:
-                # Try to find any video files that were recently created
-                video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv']
+                # Try to find any video files that were recently created in output_dir
+                video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.m4v', '.3gp']
                 all_files = []
                 for ext in video_extensions:
                     all_files.extend(list(output_dir.glob(f"*{ext}")))
                 
                 # Sort by modification time (newest first)
                 downloaded_files = sorted(all_files, key=lambda x: x.stat().st_mtime, reverse=True)
-                logger.info(f"📁 Found {len(downloaded_files)} potential video files")
+                logger.info(f"📁 Found {len(downloaded_files)} potential video files in {output_dir}")
+            
+            # If still no files found, check the current directory
+            if not downloaded_files:
+                logger.info("🔍 Checking current directory for downloaded files...")
+                current_dir = Path(".")
+                for ext in video_extensions:
+                    all_files.extend(list(current_dir.glob(f"*{ext}")))
+                
+                downloaded_files = sorted(all_files, key=lambda x: x.stat().st_mtime, reverse=True)
+                logger.info(f"📁 Found {len(downloaded_files)} potential video files in current directory")
+            
+            # If still no files, check for any recently modified files
+            if not downloaded_files:
+                logger.info("🔍 Checking for any recently modified files...")
+                import time
+                current_time = time.time()
+                recent_files = []
+                
+                # Check both output_dir and current directory
+                for search_dir in [output_dir, Path(".")]:
+                    for file_path in search_dir.iterdir():
+                        if file_path.is_file():
+                            # Check if file was modified in the last 5 minutes
+                            if current_time - file_path.stat().st_mtime < 300:  # 5 minutes
+                                recent_files.append(file_path)
+                
+                downloaded_files = sorted(recent_files, key=lambda x: x.stat().st_mtime, reverse=True)
+                logger.info(f"📁 Found {len(downloaded_files)} recently modified files")
             
             if downloaded_files:
                 video_path = downloaded_files[0]

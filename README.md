@@ -8,7 +8,9 @@ A FastAPI-based service that extracts audio from video files, transcribes the au
 - Automatic chunking of audio files larger than 25MB
 - **Automatic transcription** using OpenAI Whisper API
 - **Topic analysis and segmentation** using GPT-4o-mini
+- **Speaker-student interaction detection** using GPT-4o-mini
 - **Automatic video segment extraction** based on detected topics
+- **Separate interaction segments** for speaker-student interactions
 - **Automatic S3 upload** of video segments with direct URLs
 - **Automatic cleanup** of remnant files from previous runs
 - **Final cleanup** of local video segments after S3 upload
@@ -29,10 +31,12 @@ When you upload a video file, the API automatically:
 4. **Chunk Audio** - Split large audio files into smaller chunks (if needed)
 5. **Transcribe** - Transcribe audio using OpenAI Whisper API
 6. **Analyze Topics** - Use GPT-4o-mini to detect topics and timestamps
-7. **Extract Video Segments** - Create video segments based on detected topics
-8. **Upload to S3** - Upload video segments to S3 with direct URLs
-9. **Final Cleanup** - Remove local video segments after successful S3 upload
-10. **Return Results** - Provide audio files, transcripts, and S3 URLs
+7. **Detect Interactions** - Use GPT-4o-mini to detect speaker-student interactions
+8. **Extract Video Segments** - Create video segments based on detected topics
+9. **Extract Interaction Segments** - Create separate segments for speaker-student interactions
+10. **Upload to S3** - Upload video segments to S3 with direct URLs
+11. **Final Cleanup** - Remove local video segments after successful S3 upload
+12. **Return Results** - Provide audio files, transcripts, and S3 URLs
 
 ## Recent Success Example
 
@@ -93,6 +97,7 @@ Upload a video file to extract its audio, transcribe it, analyze topics, and cre
 Process a YouTube video URL through the complete pipeline (download, extract audio, transcribe, analyze topics, create video segments, upload to S3).
 
 **Request:**
+
 ```json
 {
   "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -100,14 +105,12 @@ Process a YouTube video URL through the complete pipeline (download, extract aud
 ```
 
 **Response Example:**
+
 ```json
 {
   "message": "YouTube video processed successfully. Audio chunked into 9 parts (original size: 79.73MB)",
   "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "chunk_files": [
-    "output/chunk_001_audio.mp3",
-    "output/chunk_002_audio.mp3"
-  ],
+  "chunk_files": ["output/chunk_001_audio.mp3", "output/chunk_002_audio.mp3"],
   "total_chunks": 9,
   "video_segments": [
     "video_segments/01_Introduction_and_Audio_Check.mp4",
@@ -152,19 +155,26 @@ Process a YouTube video URL through the complete pipeline (download, extract aud
     "video_segments/03_Understanding_Prop_Drilling.mp4"
   ],
   "total_video_segments": 32,
+  "interaction_segments": [
+    "video_segments/interactions/01_Q&A_Student_Question_about_React_Hooks.mp4",
+    "video_segments/interactions/02_Class_Discussion_on_useState.mp4"
+  ],
+  "total_interaction_segments": 5,
   "segments_json_path": "segments.json",
   "s3_urls": [
     {
       "filename": "01_Introduction_and_Audio_Check.mp4",
-      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
-      "s3_key": "video-segments/20241201_143022_01_Introduction_and_Audio_Check.mp4",
-      "size_mb": 15.2
+      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/topics/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "s3_key": "video-segments/topics/20241201_143022_01_Introduction_and_Audio_Check.mp4",
+      "size_mb": 15.2,
+      "segment_type": "topic"
     },
     {
-      "filename": "02_Discussion_on_Props_and_Event_Handling.mp4",
-      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/20241201_143022_02_Discussion_on_Props_and_Event_Handling.mp4",
-      "s3_key": "video-segments/20241201_143022_02_Discussion_on_Props_and_Event_Handling.mp4",
-      "size_mb": 22.8
+      "filename": "01_Q&A_Student_Question_about_React_Hooks.mp4",
+      "s3_url": "https://lisa-research.s3.ap-south-1.amazonaws.com/video-segments/interactions/20241201_143022_01_Q&A_Student_Question_about_React_Hooks.mp4",
+      "s3_key": "video-segments/interactions/20241201_143022_01_Q&A_Student_Question_about_React_Hooks.mp4",
+      "size_mb": 8.5,
+      "segment_type": "interaction"
     }
   ]
 }
@@ -312,22 +322,22 @@ You can modify these settings in the `extract_audio` function in `main.py`.
    - Method: GET
    - URL: `http://localhost:8000/download/{filename}`
 
-3. **List Audio Files:**
+4. **List Audio Files:**
 
    - Method: GET
    - URL: `http://localhost:8000/files/`
 
-4. **List Video Segments:**
+5. **List Video Segments:**
 
    - Method: GET
    - URL: `http://localhost:8000/video-segments/`
 
-5. **Download Video Segment:**
+6. **Download Video Segment:**
 
    - Method: GET
    - URL: `http://localhost:8000/download-video/{filename}`
 
-6. **Manual Cleanup:**
+7. **Manual Cleanup:**
 
    - Method: POST
    - URL: `http://localhost:8000/cleanup`
@@ -340,12 +350,43 @@ Script_trimmerrr/
 ├── uploads/              # Temporary video uploads (auto-cleaned)
 ├── output/               # Extracted audio files and chunks
 ├── video_segments/       # Extracted video segments
+│   ├── interactions/     # Speaker-student interaction segments
+│   └── *.mp4           # Regular topic segments
 ├── main.py              # Main API application
 ├── transcribe_segments.py # Transcription and topic analysis
 ├── extract_video_segments.py # Video segment extraction
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file
 ```
+
+## Speaker-Student Interaction Detection
+
+The API now includes advanced speaker-student interaction detection:
+
+### What it detects:
+
+- **Questions asked by the speaker to students**
+- **Student questions and speaker responses**
+- **Direct addressing of students** ("you", "class", "students")
+- **Interactive moments** ("raise your hand", "what do you think")
+- **Q&A sessions**
+- **Student participation moments**
+
+### How it works:
+
+1. **Transcription Analysis**: The system analyzes the transcript using GPT-4o-mini
+2. **Interaction Detection**: Identifies segments with clear speaker-student interaction
+3. **Separate Segmentation**: Creates dedicated video segments for interactions
+4. **Organized Storage**: Stores interaction segments in `video_segments/interactions/`
+5. **S3 Organization**: Uploads interaction segments to separate S3 folders
+
+### Response Structure:
+
+- `video_segments`: Regular topic-based segments
+- `interaction_segments`: Speaker-student interaction segments
+- `total_video_segments`: Count of regular segments
+- `total_interaction_segments`: Count of interaction segments
+- `s3_urls`: Includes `segment_type` field ("topic" or "interaction")
 
 ## Supported Video Formats
 

@@ -6,7 +6,9 @@ from pathlib import Path
 
 # Configuration
 SEGMENTS_JSON = "segments.json"
+INTERACTION_SEGMENTS_JSON = "interaction_segments.json"
 OUTPUT_DIR = "video_segments"
+INTERACTION_OUTPUT_DIR = "video_segments/interactions"  # Subfolder for interactions
 ORIGINAL_VIDEO = None  # Will be auto-detected
 
 def sanitize_filename(filename):
@@ -99,9 +101,11 @@ def create_video_segments(video_path=None):
     
     print(f"📹 Found original video: {ORIGINAL_VIDEO}")
     
-    # Create output directory
+    # Create output directories
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(INTERACTION_OUTPUT_DIR, exist_ok=True)
     print(f"📁 Output directory: {OUTPUT_DIR}")
+    print(f"💬 Interaction directory: {INTERACTION_OUTPUT_DIR}")
     
     # Load segments
     with open(SEGMENTS_JSON, 'r') as f:
@@ -109,18 +113,34 @@ def create_video_segments(video_path=None):
     
     print(f"📋 Found {len(segments)} segments to extract")
     
-    # Extract each segment
+    # Separate regular segments and interaction segments
+    regular_segments = []
+    interaction_segments = []
+    
+    for segment in segments:
+        if segment.get('segment_type') == 'interaction':
+            interaction_segments.append(segment)
+        else:
+            regular_segments.append(segment)
+    
+    print(f"📚 Regular topic segments: {len(regular_segments)}")
+    print(f"💬 Interaction segments: {len(interaction_segments)}")
+    
+    # Extract regular segments
     successful_extractions = 0
     failed_extractions = 0
+    interaction_extractions = 0
+    interaction_failures = 0
     
-    for i, segment in enumerate(segments, 1):
+    # Process regular segments
+    for i, segment in enumerate(regular_segments, 1):
         topic_title = segment.get('title', f'Unknown_Topic_{i}')
         start_time = segment.get('start_time', 0)
         end_time = segment.get('end_time', 0)
         
         # Validate timestamps
         if start_time >= end_time:
-            print(f"⚠️  Skipping segment {i}: Invalid timestamps ({start_time} >= {end_time})")
+            print(f"⚠️  Skipping regular segment {i}: Invalid timestamps ({start_time} >= {end_time})")
             failed_extractions += 1
             continue
         
@@ -140,17 +160,51 @@ def create_video_segments(video_path=None):
         
         print()  # Empty line for readability
     
+    # Process interaction segments
+    for i, segment in enumerate(interaction_segments, 1):
+        topic_title = segment.get('title', f'Unknown_Interaction_{i}')
+        start_time = segment.get('start_time', 0)
+        end_time = segment.get('end_time', 0)
+        interaction_type = segment.get('interaction_type', 'Unknown')
+        
+        # Validate timestamps
+        if start_time >= end_time:
+            print(f"⚠️  Skipping interaction segment {i}: Invalid timestamps ({start_time} >= {end_time})")
+            interaction_failures += 1
+            continue
+        
+        # Create filename with interaction type
+        sanitized_title = sanitize_filename(topic_title)
+        output_filename = f"{i:02d}_{interaction_type}_{sanitized_title}.mp4"
+        output_path = os.path.join(INTERACTION_OUTPUT_DIR, output_filename)
+        
+        # Extract segment
+        success, error = extract_video_segment(ORIGINAL_VIDEO, start_time, end_time - start_time, output_path, f"{topic_title} ({interaction_type})")
+        if success:
+            interaction_extractions += 1
+        else:
+            interaction_failures += 1
+            if error:
+                print(f"  Error output: {error}")
+        
+        print()  # Empty line for readability
+    
     # Summary
     print("=" * 50)
     print("📊 EXTRACTION SUMMARY")
     print("=" * 50)
-    print(f"✅ Successful extractions: {successful_extractions}")
-    print(f"❌ Failed extractions: {failed_extractions}")
+    print(f"✅ Successful regular extractions: {successful_extractions}")
+    print(f"❌ Failed regular extractions: {failed_extractions}")
+    print(f"💬 Successful interaction extractions: {interaction_extractions}")
+    print(f"❌ Failed interaction extractions: {interaction_failures}")
     print(f"📁 Output directory: {OUTPUT_DIR}")
+    print(f"💬 Interaction directory: {INTERACTION_OUTPUT_DIR}")
     
-    if successful_extractions > 0:
-        print(f"\n🎉 Successfully extracted {successful_extractions} video segments!")
-        print(f"📂 Check the '{OUTPUT_DIR}' folder for your video segments.")
+    total_successful = successful_extractions + interaction_extractions
+    if total_successful > 0:
+        print(f"\n🎉 Successfully extracted {total_successful} video segments!")
+        print(f"📂 Check the '{OUTPUT_DIR}' folder for regular topic segments.")
+        print(f"💬 Check the '{INTERACTION_OUTPUT_DIR}' folder for interaction segments.")
         return True
     else:
         print("❌ No video segments were successfully extracted.")
@@ -165,24 +219,61 @@ def list_segments():
     with open(SEGMENTS_JSON, 'r') as f:
         segments = json.load(f)
     
-    print(f"📋 Found {len(segments)} segments:")
+    # Separate regular segments and interaction segments
+    regular_segments = []
+    interaction_segments = []
+    
+    for segment in segments:
+        if segment.get('segment_type') == 'interaction':
+            interaction_segments.append(segment)
+        else:
+            regular_segments.append(segment)
+    
+    print(f"📋 Found {len(segments)} total segments:")
+    print(f"📚 Regular topic segments: {len(regular_segments)}")
+    print(f"💬 Interaction segments: {len(interaction_segments)}")
     print("=" * 80)
     
-    for i, segment in enumerate(segments, 1):
-        topic_title = segment.get('title', f'Unknown_Topic_{i}')
-        start_time = segment.get('start_time', 0)
-        end_time = segment.get('end_time', 0)
-        chunk_number = segment.get('chunk_number', 'N/A')
-        
-        start_str = format_time(start_time)
-        end_str = format_time(end_time)
-        duration = end_time - start_time
-        duration_str = format_time(duration)
-        
-        print(f"{i:2d}. {topic_title}")
-        print(f"    Time: {start_str} - {end_str} (Duration: {duration_str})")
-        print(f"    Chunk: {chunk_number}")
-        print()
+    # List regular segments
+    if regular_segments:
+        print("\n📚 REGULAR TOPIC SEGMENTS:")
+        print("-" * 40)
+        for i, segment in enumerate(regular_segments, 1):
+            topic_title = segment.get('title', f'Unknown_Topic_{i}')
+            start_time = segment.get('start_time', 0)
+            end_time = segment.get('end_time', 0)
+            chunk_number = segment.get('chunk_number', 'N/A')
+            
+            start_str = format_time(start_time)
+            end_str = format_time(end_time)
+            duration = end_time - start_time
+            duration_str = format_time(duration)
+            
+            print(f"{i:2d}. {topic_title}")
+            print(f"    Time: {start_str} - {end_str} (Duration: {duration_str})")
+            print(f"    Chunk: {chunk_number}")
+            print()
+    
+    # List interaction segments
+    if interaction_segments:
+        print("\n💬 SPEAKER-STUDENT INTERACTION SEGMENTS:")
+        print("-" * 40)
+        for i, segment in enumerate(interaction_segments, 1):
+            topic_title = segment.get('title', f'Unknown_Interaction_{i}')
+            start_time = segment.get('start_time', 0)
+            end_time = segment.get('end_time', 0)
+            chunk_number = segment.get('chunk_number', 'N/A')
+            interaction_type = segment.get('interaction_type', 'Unknown')
+            
+            start_str = format_time(start_time)
+            end_str = format_time(end_time)
+            duration = end_time - start_time
+            duration_str = format_time(duration)
+            
+            print(f"{i:2d}. {topic_title} ({interaction_type})")
+            print(f"    Time: {start_str} - {end_str} (Duration: {duration_str})")
+            print(f"    Chunk: {chunk_number}")
+            print()
 
 if __name__ == "__main__":
     import sys
@@ -201,6 +292,10 @@ if __name__ == "__main__":
         print("=" * 30)
         print("This script extracts video segments from your original video based on")
         print("the timestamps in segments.json and names them using topic titles.")
+        print()
+        print("NEW: Now also extracts speaker-student interaction segments!")
+        print("Regular topic segments go to: video_segments/")
+        print("Interaction segments go to: video_segments/interactions/")
         print()
         print("Usage:")
         print("  python extract_video_segments.py list    - List all segments")

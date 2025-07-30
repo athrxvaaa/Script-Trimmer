@@ -59,7 +59,7 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
             return json.load(f)
     
     audio_files = [f for f in sorted(os.listdir(output_dir)) if f.endswith((
-        '.mp3', '.aac', '.wav', '.flac', '.m4a', '.ogg', '.opus'
+        '.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus'
     ))]
     results = []
     print(f"Found {len(audio_files)} audio files to transcribe.")
@@ -76,8 +76,7 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                         model="whisper-1",
                         file=audio_file,
                         response_format="verbose_json",
-                        language=language,
-                        timeout=TIMEOUT
+                        language=language
                     )
                 
                 print(f"Finished transcription: {file_path}")
@@ -93,12 +92,12 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                 
                 # Add all segments with their timestamps and text
                 for i, segment in enumerate(transcript.segments):
-                    print(f"  Segment {i+1}: {segment.start}s - {segment.end}s")
+                    print(f"  Segment {i+1}: {segment['start']}s - {segment['end']}s")
                     file_transcription["segments"].append({
                         "segment_id": i + 1,
-                        "start": segment.start,
-                        "end": segment.end,
-                        "text": segment.text
+                        "start": segment['start'],
+                        "end": segment['end'],
+                        "text": segment['text']
                     })
                 
                 results.append(file_transcription)
@@ -192,8 +191,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=256,
-                temperature=0.2,
-                timeout=TIMEOUT
+                temperature=0.2
             )
             content = response.choices[0].message.content.strip()
             
@@ -242,11 +240,111 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 print(f"Failed GPT analysis after {MAX_RETRIES} attempts. Using fallback.")
                 return [{"title": "Unknown", "start": "00:00", "end": f"{max_minutes}:{max_seconds:02d}"}]
 
+def detect_speaker_student_interactions(transcript, chunk_duration):
+    """
+    Detect segments where the speaker is directly interacting with students.
+    This includes Q&A sessions, student questions, direct addressing, etc.
+    """
+    max_minutes = int(chunk_duration // 60)
+    max_seconds = int(chunk_duration % 60)
+    
+    prompt = f"""
+You are analyzing a lecture transcript to identify segments where the speaker is directly interacting with students.
+
+Look for:
+- Questions asked by the speaker to students
+- Student questions and speaker responses
+- Direct addressing of students ("you", "class", "students")
+- Interactive moments ("raise your hand", "what do you think")
+- Q&A sessions
+- Student participation moments
+
+Analyze this transcript and identify segments with speaker-student interactions:
+
+{transcript}
+
+Return ONLY a JSON array with interaction segments. Each segment should have:
+- "title": Descriptive title of the interaction
+- "start": Start time in MM:SS format (must be within 00:00 to {max_minutes}:{max_seconds:02d})
+- "end": End time in MM:SS format (must be within 00:00 to {max_minutes}:{max_seconds:02d})
+- "interaction_type": Type of interaction (e.g., "Q&A", "Student Question", "Direct Address", "Interactive Moment")
+
+IMPORTANT: 
+- End times must NOT exceed {max_minutes}:{max_seconds:02d}
+- Only include segments with clear speaker-student interaction
+- Be specific about when each interaction starts and ends
+
+Example output:
+[
+  {{"title": "Student Question about React Hooks", "start": "02:30", "end": "04:15", "interaction_type": "Student Question"}},
+  {{"title": "Class Discussion on useState", "start": "05:00", "end": "07:30", "interaction_type": "Q&A"}}
+]
+
+Return ONLY the JSON array, no markdown formatting or explanations.
+"""
+    
+    # Retry logic for interaction detection
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = openai.chat.completions.create(
+                model=GPT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=256,
+                temperature=0.2
+            )
+            content = response.choices[0].message.content.strip()
+            
+            # Clean the response - remove markdown code blocks
+            if content.startswith("```json"):
+                content = content[7:]  # Remove ```json
+            if content.startswith("```"):
+                content = content[3:]   # Remove ```
+            if content.endswith("```"):
+                content = content[:-3]  # Remove ```
+            
+            content = content.strip()
+            
+            # Try to parse the JSON output
+            try:
+                interactions = json.loads(content)
+                if isinstance(interactions, list):
+                    # Validate timestamps
+                    validated_interactions = []
+                    for interaction in interactions:
+                        if isinstance(interaction, dict) and "title" in interaction:
+                            start_str = interaction.get("start", "00:00")
+                            end_str = interaction.get("end", "00:00")
+                            
+                            # Validate timestamp format and range
+                            if _validate_timestamp(start_str, end_str, chunk_duration):
+                                validated_interactions.append(interaction)
+                            else:
+                                print(f"Invalid timestamp in interaction '{interaction['title']}': {start_str} - {end_str}")
+                    
+                    return validated_interactions
+                else:
+                    print(f"GPT returned non-list JSON for interactions: {content}")
+                    return []
+            except json.JSONDecodeError as e:
+                print(f"JSON parsing failed for interactions: {e}")
+                print(f"Raw content: {content}")
+                return []
+                
+        except Exception as e:
+            print(f"Interaction detection attempt {attempt + 1} failed: {str(e)}")
+            if attempt < MAX_RETRIES - 1:
+                print(f"Retrying interaction detection in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"Failed interaction detection after {MAX_RETRIES} attempts.")
+                return []
+
 def create_segment_json(audio_files):
     segment_json = []
+    interaction_segments = []  # Separate list for speaker-student interactions
     prev_topics = []
     
-    for audio_file in tqdm(audio_files, desc="Analysing topics", unit="file"):
+    for audio_file in tqdm(audio_files, desc="Analysing topics and interactions", unit="file"):
         # Skip files with errors
         if audio_file.get("error"):
             print(f"Skipping {audio_file['filename']} due to transcription error")
@@ -262,7 +360,12 @@ def create_segment_json(audio_files):
         chunk_start_time = audio_file["segments"][0]["start"] if audio_file["segments"] else 0
         
         # Calculate global start time based on chunk number
-        chunk_number = int(audio_file["filename"].split("_")[1])
+        try:
+            # Try to extract chunk number from filename (old format)
+            chunk_number = int(audio_file["filename"].split("_")[1])
+        except (ValueError, IndexError):
+            # New format: use 1 as default chunk number
+            chunk_number = 1
         global_start_offset = (chunk_number - 1) * 600  # Each chunk is ~10 minutes
         
         # Create a single transcript with all segments for this file
@@ -275,6 +378,9 @@ def create_segment_json(audio_files):
         
         # Analyze topics for the entire file with chunk duration constraint
         topics = analyse_topic_gpt(transcript_with_time, prev_topics, chunk_duration)
+        
+        # Detect speaker-student interactions
+        interactions = detect_speaker_student_interactions(transcript_with_time, chunk_duration)
         
         # Add new topics to the list
         for topic in topics:
@@ -310,7 +416,8 @@ def create_segment_json(audio_files):
                         "end_time": global_end,
                         "chunk_start": chunk_start_time,
                         "chunk_end": chunk_duration,
-                        "chunk_number": chunk_number
+                        "chunk_number": chunk_number,
+                        "segment_type": "topic"  # Mark as regular topic segment
                     })
                 except (ValueError, IndexError) as e:
                     print(f"Invalid timestamp format in topic '{topic['title']}': {start_str} - {end_str}")
@@ -325,13 +432,77 @@ def create_segment_json(audio_files):
                         "end_time": global_start_offset + chunk_duration,
                         "chunk_start": chunk_start_time,
                         "chunk_end": chunk_duration,
-                        "chunk_number": chunk_number
+                        "chunk_number": chunk_number,
+                        "segment_type": "topic"  # Mark as regular topic segment
+                    })
+        
+        # Add interaction segments to separate list
+        for interaction in interactions:
+            if isinstance(interaction, dict) and "title" in interaction:
+                # Parse and validate timestamps
+                start_str = interaction.get("start", "00:00")
+                end_str = interaction.get("end", "00:00")
+                
+                # Convert MM:SS to seconds
+                try:
+                    start_parts = start_str.split(":")
+                    end_parts = end_str.split(":")
+                    
+                    start_seconds = int(start_parts[0]) * 60 + int(start_parts[1])
+                    end_seconds = int(end_parts[0]) * 60 + int(end_parts[1])
+                    
+                    # Ensure end time doesn't exceed chunk duration
+                    if end_seconds > chunk_duration:
+                        end_seconds = chunk_duration
+                        end_str = f"{int(end_seconds//60):02d}:{int(end_seconds%60):02d}"
+                    
+                    # Calculate global timestamps
+                    global_start = global_start_offset + start_seconds
+                    global_end = global_start_offset + end_seconds
+                    
+                    interaction_segments.append({
+                        "title": interaction["title"],
+                        "start": start_str,
+                        "end": end_str,
+                        "interaction_type": interaction.get("interaction_type", "Unknown"),
+                        "filename": audio_file["filename"],
+                        "start_time": global_start,
+                        "end_time": global_end,
+                        "chunk_start": chunk_start_time,
+                        "chunk_end": chunk_duration,
+                        "chunk_number": chunk_number,
+                        "segment_type": "interaction"  # Mark as interaction segment
+                    })
+                except (ValueError, IndexError) as e:
+                    print(f"Invalid timestamp format in interaction '{interaction['title']}': {start_str} - {end_str}")
+                    # Use fallback timestamps
+                    interaction_segments.append({
+                        "title": interaction["title"],
+                        "start": "00:00",
+                        "end": f"{int(chunk_duration//60):02d}:{int(chunk_duration%60):02d}",
+                        "interaction_type": interaction.get("interaction_type", "Unknown"),
+                        "filename": audio_file["filename"],
+                        "start_time": global_start_offset,
+                        "end_time": global_start_offset + chunk_duration,
+                        "chunk_start": chunk_start_time,
+                        "chunk_end": chunk_duration,
+                        "chunk_number": chunk_number,
+                        "segment_type": "interaction"  # Mark as interaction segment
                     })
         
         prev_topics = topics
         time.sleep(0.5)
     
-    return segment_json
+    # Combine regular segments and interaction segments
+    all_segments = segment_json + interaction_segments
+    
+    # Save interaction segments separately for easy access
+    if interaction_segments:
+        with open("interaction_segments.json", "w") as f:
+            json.dump(interaction_segments, f, indent=2)
+        print(f"💬 Found {len(interaction_segments)} speaker-student interaction segments")
+    
+    return all_segments
 
 if __name__ == "__main__":
     try:

@@ -46,8 +46,8 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirem
     "wget"     # Alternative downloader
 ).add_local_file("transcribe_segments.py", "/root/transcribe_segments.py").add_local_file("extract_video_segments.py", "/root/extract_video_segments.py")
 
-# Create a volume for persistent storage
-volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True)
+# Create a volume for persistent storage with increased size for large files
+volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True, size_gb=50)
 
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
@@ -58,6 +58,13 @@ OUTPUT_DIR = Path("/data/output")
 VIDEO_SEGMENTS_DIR = Path("/data/video_segments")
 MAX_AUDIO_SIZE_MB = 25
 CHUNK_DURATION_MINUTES = 10
+MAX_FILE_SIZE_GB = 10  # Maximum file size supported (10GB)
+
+# Storage optimizations for large files:
+# - 50GB volume size for large file storage
+# - 16GB RAM for video processing (3-4x file size)
+# - 4-hour timeout for very large files
+# - Optimized chunk sizes for streaming uploads
 
 # S3 Configuration
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "lisa-research")
@@ -99,6 +106,18 @@ class YouTubeProcessResponse(BaseModel):
 def get_file_size_mb(file_path: Path) -> float:
     """Get file size in MB"""
     return file_path.stat().st_size / (1024 * 1024)
+
+def get_file_size_gb(file_path: Path) -> float:
+    """Get file size in GB"""
+    return file_path.stat().st_size / (1024 * 1024 * 1024)
+
+def validate_file_size(file_size_mb: float) -> bool:
+    """Validate if file size is within acceptable limits"""
+    file_size_gb = file_size_mb / 1024
+    if file_size_gb > MAX_FILE_SIZE_GB:
+        logger.error(f"❌ File size {file_size_gb:.2f}GB exceeds maximum limit of {MAX_FILE_SIZE_GB}GB")
+        return False
+    return True
 
 def get_s3_client():
     """Get S3 client with credentials from environment variables"""
@@ -1110,8 +1129,8 @@ def process_youtube_video(youtube_url: str) -> dict:
 @app.function(
     image=image,
     cpu=4.0,  # 4 CPU cores for heavy video processing
-    memory=8192,  # 8GB RAM for large file handling
-    timeout=7200,  # 2 hours timeout for large file processing
+    memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
+    timeout=14400,  # 4 hours timeout for very large file processing
     volumes={"/data": volume},
     secrets=[secret]
 )
@@ -1131,19 +1150,23 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
             detail=f"Invalid file type. Please upload a video file. Allowed formats: {', '.join(allowed_extensions)}"
         )
     
-    # Check file size (limit to 2GB for large videos)
+    # Check file size with improved validation
     content = await video_file.read()
     file_size_mb = len(content) / (1024 * 1024)
-    print(f"📊 File size: {file_size_mb:.2f} MB")
+    file_size_gb = file_size_mb / 1024
+    print(f"📊 File size: {file_size_mb:.2f} MB ({file_size_gb:.2f} GB)")
     
-    if file_size_mb > 2048:  # 2GB limit
+    # Validate file size using our new function
+    if not validate_file_size(file_size_mb):
         raise HTTPException(
             status_code=400,
-            detail=f"File too large ({file_size_mb:.2f}MB). Maximum size is 2GB. Please compress your video or use a smaller file."
+            detail=f"File too large ({file_size_gb:.2f}GB). Maximum size is {MAX_FILE_SIZE_GB}GB. Please compress your video or use a smaller file."
         )
     
     # Add progress logging for large files
-    if file_size_mb > 100:
+    if file_size_gb > 2:
+        print(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to process...")
+    elif file_size_mb > 100:
         print(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to process...")
     
     await video_file.seek(0)  # Reset file pointer after reading
@@ -1161,17 +1184,22 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
         video_filename = f"{file_id}_{video_file.filename}"
         video_path = UPLOAD_DIR / video_filename
         
-        # Use streaming for large files
-        if file_size_mb > 100:
-            print(f"📤 Streaming large file to disk...")
-            with open(video_path, "wb") as f:
-                while chunk := await video_file.read(8192):  # 8KB chunks
-                    f.write(chunk)
+        # Use optimized streaming for large files
+        if file_size_gb > 2:
+            print(f"📤 Streaming very large file ({file_size_gb:.2f}GB) to disk with optimized chunks...")
+            chunk_size = 32768  # 32KB chunks for very large files
+        elif file_size_mb > 100:
+            print(f"📤 Streaming large file ({file_size_mb:.2f}MB) to disk...")
+            chunk_size = 16384  # 16KB chunks for large files
         else:
-            # For smaller files, write directly
-            content = await video_file.read()
-            with open(video_path, "wb") as f:
-                f.write(content)
+            print(f"📤 Writing small file ({file_size_mb:.2f}MB) to disk...")
+            chunk_size = 8192  # 8KB chunks for normal files
+        
+        # Reset file pointer and stream to disk
+        await video_file.seek(0)
+        with open(video_path, "wb") as f:
+            while chunk := await video_file.read(chunk_size):
+                f.write(chunk)
         
         print(f"💾 File saved: {video_filename}")
         logger.info(f"📁 Saved uploaded file: {video_filename}")
@@ -1191,8 +1219,8 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
 @app.function(
     image=image,
     cpu=4.0,  # 4 CPU cores for heavy video processing
-    memory=8192,  # 8GB RAM for large file handling
-    timeout=3600,  # 1 hour timeout for processing
+    memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
+    timeout=7200,  # 2 hours timeout for processing
     volumes={"/data": volume},
     secrets=[secret]
 )

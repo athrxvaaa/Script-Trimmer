@@ -46,8 +46,8 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirem
     "wget"     # Alternative downloader
 ).add_local_file("transcribe_segments.py", "/root/transcribe_segments.py").add_local_file("extract_video_segments.py", "/root/extract_video_segments.py")
 
-# Create a volume for persistent storage with increased size for large files
-volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True, size_gb=50)
+# Create a volume for persistent storage
+volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True)
 
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
@@ -61,7 +61,7 @@ CHUNK_DURATION_MINUTES = 10
 MAX_FILE_SIZE_GB = 10  # Maximum file size supported (10GB)
 
 # Storage optimizations for large files:
-# - 50GB volume size for large file storage
+# - Default Modal volume size (handles large files)
 # - 16GB RAM for video processing (3-4x file size)
 # - 4-hour timeout for very large files
 # - Optimized chunk sizes for streaming uploads

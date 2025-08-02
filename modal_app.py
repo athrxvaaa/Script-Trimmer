@@ -88,6 +88,27 @@ class AudioExtractionResponse(BaseModel):
     segments_json_path: Optional[str] = None
     s3_urls: Optional[List[dict]] = None
 
+class PresignedUrlRequest(BaseModel):
+    filename: str
+    content_type: str = "video/mp4"
+
+class PresignedUrlResponse(BaseModel):
+    message: str
+    presigned_url: str
+    s3_url: str
+    s3_key: str
+    expires_in: int
+
+class S3UploadRequest(BaseModel):
+    s3_url: str
+
+class S3UploadResponse(BaseModel):
+    message: str
+    s3_url: str
+    s3_key: str
+    size_mb: float
+    upload_type: str
+
 class YouTubeProcessRequest(BaseModel):
     youtube_url: str
 
@@ -105,16 +126,6 @@ class YouTubeProcessResponse(BaseModel):
     s3_urls: Optional[List[dict]] = None
     processing_time_seconds: float
     video_upload_info: Optional[dict] = None
-
-class S3UploadRequest(BaseModel):
-    s3_url: str
-
-class S3UploadResponse(BaseModel):
-    message: str
-    s3_url: str
-    s3_key: str
-    size_mb: float
-    upload_type: str
 
 # Helper functions
 def get_file_size_mb(file_path: Path) -> float:
@@ -1559,6 +1570,56 @@ def process_youtube_video(youtube_url: str) -> dict:
 # Web endpoints
 @app.function(
     image=image,
+    cpu=1.0,  # Minimal CPU for presigned URL generation
+    memory=1024,  # Minimal RAM for presigned URL generation
+    timeout=300,  # 5 minutes timeout
+    volumes={"/data": volume},
+    secrets=[secret]
+)
+@modal.fastapi_endpoint(method="POST")
+async def get_presigned_url_endpoint(request: PresignedUrlRequest):
+    """Generate presigned URL for direct S3 upload"""
+    print("🚀 get_presigned_url_endpoint called")
+    print(f"📁 Filename: {request.filename}")
+    print(f"📄 Content-Type: {request.content_type}")
+    
+    # Add immediate logging to stdout and stderr
+    import sys
+    sys.stdout.write("🔍 DEBUG: Presigned URL function started - stdout\n")
+    sys.stdout.flush()
+    sys.stderr.write("🔍 DEBUG: Presigned URL function started - stderr\n")
+    sys.stderr.flush()
+    
+    logger.info("🚀 get_presigned_url_endpoint called")
+    logger.info(f"📁 Filename: {request.filename}")
+    logger.info(f"📄 Content-Type: {request.content_type}")
+    
+    try:
+        # Generate presigned URL
+        print("🔑 Generating presigned URL...")
+        logger.info("🔑 Generating presigned URL...")
+        
+        presigned_info = generate_presigned_url(request.filename, request.content_type)
+        
+        if presigned_info:
+            print(f"✅ Presigned URL generated successfully")
+            logger.info(f"✅ Presigned URL generated successfully")
+            return PresignedUrlResponse(
+                message="Presigned URL generated successfully",
+                **presigned_info
+            )
+        else:
+            print("❌ Failed to generate presigned URL")
+            logger.error("❌ Failed to generate presigned URL")
+            raise HTTPException(status_code=500, detail="Failed to generate presigned URL")
+        
+    except Exception as e:
+        print(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
+        logger.error(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating presigned URL: {str(e)}")
+
+@app.function(
+    image=image,
     cpu=4.0,  # 4 CPU cores for heavy video processing
     memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
     timeout=14400,  # 4 hours timeout for very large file processing
@@ -1722,4 +1783,43 @@ async def extract_audio_endpoint(request: S3UploadRequest):
         print(f"❌ Error in extract_audio_endpoint: {str(e)}")
         logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing video from S3: {str(e)}")
+
+def generate_presigned_url(filename: str, content_type: str = "video/mp4") -> Optional[dict]:
+    """Generate a presigned URL for direct S3 upload"""
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.error("❌ S3 client not available")
+        return None
+    
+    try:
+        # Create S3 key with timestamp to avoid conflicts
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_id = str(uuid.uuid4())
+        s3_key = f"videos/{timestamp}_{file_id}_{filename}"
+        
+        # Generate the final S3 URL
+        s3_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{s3_key}"
+        
+        # Generate presigned URL for PUT operation (upload)
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': S3_BUCKET_NAME,
+                'Key': s3_key,
+                'ContentType': content_type
+            },
+            ExpiresIn=3600  # 1 hour expiration
+        )
+        
+        logger.info(f"✅ Generated presigned URL for {filename}")
+        return {
+            "presigned_url": presigned_url,
+            "s3_url": s3_url,
+            "s3_key": s3_key,
+            "expires_in": 3600
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error generating presigned URL: {e}")
+        return None
 

@@ -72,6 +72,9 @@ S3_REGION = os.getenv("S3_REGION", "ap-south-1")
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 
+# Multipart upload configuration
+MULTIPART_CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks for multipart upload
+
 # Pydantic models
 class AudioExtractionResponse(BaseModel):
     message: str
@@ -101,6 +104,17 @@ class YouTubeProcessResponse(BaseModel):
     segments_json_path: Optional[str] = None
     s3_urls: Optional[List[dict]] = None
     processing_time_seconds: float
+    video_upload_info: Optional[dict] = None
+
+class S3UploadRequest(BaseModel):
+    s3_url: str
+
+class S3UploadResponse(BaseModel):
+    message: str
+    s3_url: str
+    s3_key: str
+    size_mb: float
+    upload_type: str
 
 # Helper functions
 def get_file_size_mb(file_path: Path) -> float:
@@ -121,8 +135,14 @@ def validate_file_size(file_size_mb: float) -> bool:
 
 def get_s3_client():
     """Get S3 client with credentials from environment variables"""
+    print(f"🔍 DEBUG: S3_ACCESS_KEY present: {S3_ACCESS_KEY is not None}")
+    print(f"🔍 DEBUG: S3_SECRET_KEY present: {S3_SECRET_KEY is not None}")
+    print(f"🔍 DEBUG: S3_BUCKET_NAME: {S3_BUCKET_NAME}")
+    print(f"🔍 DEBUG: S3_REGION: {S3_REGION}")
+    
     if not S3_ACCESS_KEY or not S3_SECRET_KEY:
         logger.warning("⚠️  S3 credentials not found in environment variables")
+        print("⚠️  S3 credentials not found in environment variables")
         return None
     
     try:
@@ -132,9 +152,11 @@ def get_s3_client():
             aws_secret_access_key=S3_SECRET_KEY,
             region_name=S3_REGION
         )
+        print("✅ S3 client created successfully")
         return s3_client
     except Exception as e:
         logger.error(f"❌ Failed to create S3 client: {e}")
+        print(f"❌ Failed to create S3 client: {e}")
         return None
 
 def upload_file_to_s3(file_path: Path, s3_key: str) -> Optional[str]:
@@ -163,6 +185,123 @@ def upload_file_to_s3(file_path: Path, s3_key: str) -> Optional[str]:
         return None
     except Exception as e:
         logger.error(f"❌ Unexpected error during S3 upload: {e}")
+        return None
+
+def upload_file_to_s3_multipart(file_path: Path, s3_key: str) -> Optional[str]:
+    """Upload a file to S3 using multipart upload and return the URL"""
+    s3_client = get_s3_client()
+    if not s3_client:
+        logger.error("❌ S3 client not available")
+        return None
+    
+    try:
+        file_size = file_path.stat().st_size
+        logger.info(f"📤 Starting multipart upload for {file_path.name} ({file_size / (1024*1024):.2f}MB)")
+        
+        # Check if file is large enough for multipart upload (5MB minimum)
+        if file_size < 5 * 1024 * 1024:
+            logger.info(f"📁 File size ({file_size / (1024*1024):.2f}MB) is small, using regular upload")
+            return upload_file_to_s3(file_path, s3_key)
+        
+        # Create multipart upload
+        response = s3_client.create_multipart_upload(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            ContentType='video/mp4'
+        )
+        upload_id = response['UploadId']
+        logger.info(f"🔄 Created multipart upload with ID: {upload_id}")
+        
+        # Calculate number of parts
+        num_parts = (file_size + MULTIPART_CHUNK_SIZE - 1) // MULTIPART_CHUNK_SIZE
+        logger.info(f"📊 Total parts: {num_parts}")
+        
+        parts = []
+        
+        with open(file_path, 'rb') as file:
+            for part_num in range(1, num_parts + 1):
+                # Read chunk
+                chunk = file.read(MULTIPART_CHUNK_SIZE)
+                if not chunk:
+                    break
+                
+                logger.info(f"📤 Uploading part {part_num}/{num_parts} ({len(chunk) / (1024*1024):.2f}MB)")
+                
+                # Upload part
+                response = s3_client.upload_part(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=s3_key,
+                    PartNumber=part_num,
+                    UploadId=upload_id,
+                    Body=chunk
+                )
+                
+                parts.append({
+                    'ETag': response['ETag'],
+                    'PartNumber': part_num
+                })
+                
+                logger.info(f"✅ Part {part_num} uploaded successfully")
+        
+        # Complete multipart upload
+        logger.info("🔗 Completing multipart upload...")
+        s3_client.complete_multipart_upload(
+            Bucket=S3_BUCKET_NAME,
+            Key=s3_key,
+            UploadId=upload_id,
+            MultipartUpload={'Parts': parts}
+        )
+        
+        # Generate the S3 URL
+        s3_url = f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{s3_key}"
+        logger.info(f"✅ Successfully uploaded to S3 via multipart: {s3_url}")
+        return s3_url
+        
+    except ClientError as e:
+        logger.error(f"❌ S3 multipart upload failed for {file_path.name}: {e}")
+        # Try to abort multipart upload if it was created
+        if 'upload_id' in locals():
+            try:
+                s3_client.abort_multipart_upload(
+                    Bucket=S3_BUCKET_NAME,
+                    Key=s3_key,
+                    UploadId=upload_id
+                )
+                logger.info("🔄 Aborted multipart upload due to error")
+            except Exception as abort_error:
+                logger.error(f"❌ Failed to abort multipart upload: {abort_error}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Unexpected error during S3 multipart upload: {e}")
+        return None
+
+def upload_video_to_s3_multipart(video_path: Path, original_filename: str) -> Optional[dict]:
+    """Upload video file to S3 using multipart upload and return upload info"""
+    try:
+        # Create S3 key with timestamp to avoid conflicts
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_id = str(uuid.uuid4())
+        s3_key = f"videos/{timestamp}_{file_id}_{original_filename}"
+        
+        logger.info(f"🚀 Starting S3 multipart upload for video: {original_filename}")
+        
+        s3_url = upload_file_to_s3_multipart(video_path, s3_key)
+        if s3_url:
+            file_size_mb = get_file_size_mb(video_path)
+            return {
+                "message": f"Video uploaded successfully to S3",
+                "filename": original_filename,
+                "s3_url": s3_url,
+                "s3_key": s3_key,
+                "size_mb": file_size_mb,
+                "upload_type": "multipart"
+            }
+        else:
+            logger.error(f"❌ Failed to upload video {original_filename} to S3")
+            return None
+            
+    except Exception as e:
+        logger.error(f"❌ Error uploading video to S3: {e}")
         return None
 
 def upload_video_segments_to_s3(video_segments: List[str]) -> List[dict]:
@@ -624,6 +763,298 @@ def run_video_segment_extraction(video_path: Path) -> List[str]:
         logger.error(f"❌ Error during video segment extraction: {str(e)}")
         return []
 
+def download_video_from_s3(s3_url: str, output_dir: Path) -> Optional[Path]:
+    """Download video from S3 URL and return the file path"""
+    try:
+        logger.info(f"📥 Starting S3 video download: {s3_url}")
+        
+        # Generate a unique filename
+        file_id = str(uuid.uuid4())
+        video_filename = f"{file_id}_s3_video.mp4"
+        video_path = output_dir / video_filename
+        
+        # Download using curl or wget
+        logger.info("⬇️  Downloading video from S3...")
+        
+        # Try curl first, then wget as fallback
+        download_cmd = [
+            'curl', '-L', '-o', str(video_path), s3_url
+        ]
+        
+        result = subprocess.run(download_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0 or not video_path.exists():
+            logger.warning("⚠️  Curl failed, trying wget...")
+            download_cmd = [
+                'wget', '-O', str(video_path), s3_url
+            ]
+            result = subprocess.run(download_cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0 or not video_path.exists():
+            logger.error(f"❌ Failed to download video from S3: {result.stderr}")
+            return None
+        
+        # Get downloaded file size
+        file_size_mb = get_file_size_mb(video_path)
+        logger.info(f"✅ S3 video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
+        return video_path
+        
+    except Exception as e:
+        logger.error(f"❌ Error downloading video from S3: {str(e)}")
+        return None
+
+def process_video_from_s3(s3_url: str) -> dict:
+    """Process video from S3 URL through the complete pipeline"""
+    import sys
+    sys.path.append("/root")
+    import transcribe_segments
+    
+    start_time = datetime.now()
+    logger.info("=" * 60)
+    logger.info("🚀 NEW S3 VIDEO PROCESSING REQUEST")
+    logger.info("=" * 60)
+    logger.info(f"☁️  S3 URL: {s3_url}")
+    logger.info(f"🆔 Request ID: {start_time.strftime('%Y%m%d_%H%M%S')}")
+    
+    # Clean up remnant files from previous runs
+    cleanup_previous_files()
+    
+    try:
+        # Download video from S3
+        video_path = download_video_from_s3(s3_url, UPLOAD_DIR)
+        if not video_path:
+            raise Exception("Failed to download video from S3 - download returned None")
+        if not video_path.exists():
+            raise Exception("Failed to download video from S3 - file not found after download")
+        
+        # Get video file size
+        video_size_mb = get_file_size_mb(video_path)
+        logger.info(f"✅ Video file ready: {video_size_mb:.2f}MB")
+        
+        # Extract audio using ffmpeg
+        logger.info("🎵 Starting audio extraction from S3 video...")
+        try:
+            # First, probe the input file to get the audio codec
+            logger.info("🔍 Probing video file for audio codec...")
+            probe_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'a:0',
+                '-show_entries', 'stream=codec_name',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(video_path)
+            ]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            audio_codec = probe_result.stdout.strip()
+            logger.info(f"🎼 Detected audio codec: {audio_codec}")
+            
+            file_id = str(uuid.uuid4())
+            audio_filename = f"{file_id}_s3_audio.mp3"
+            audio_path = OUTPUT_DIR / audio_filename
+            logger.info(f"📄 Audio will be saved as: {audio_filename}")
+            
+            # Extract audio using FFmpeg
+            logger.info("⚡ Extracting audio using FFmpeg...")
+            cmd_copy = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-vn',
+                '-acodec', 'mp3',
+                '-ab', '192k',
+                '-y',
+                str(audio_path)
+            ]
+            result_copy = subprocess.run(cmd_copy, capture_output=True, text=True)
+            
+            if result_copy.returncode != 0 or not audio_path.exists() or audio_path.stat().st_size == 0:
+                logger.error(f"❌ FFmpeg extraction failed: {result_copy.stderr}")
+                raise Exception(f"FFmpeg error: {result_copy.stderr}")
+            
+            # Get extracted audio file size
+            audio_size_mb = audio_path.stat().st_size / (1024 * 1024)
+            logger.info(f"✅ Audio extraction completed successfully: {audio_size_mb:.2f}MB")
+            
+        except Exception as e:
+            logger.error(f"❌ Error extracting audio: {str(e)}")
+            raise Exception(f"Error extracting audio: {str(e)}")
+        
+        # Check if audio file needs chunking
+        audio_size_mb = get_file_size_mb(audio_path)
+        logger.info(f"📊 Audio file size: {audio_size_mb:.2f}MB (max before chunking: {MAX_AUDIO_SIZE_MB}MB)")
+        
+        if audio_size_mb > MAX_AUDIO_SIZE_MB:
+            logger.info(f"✂️  Audio file exceeds {MAX_AUDIO_SIZE_MB}MB, starting chunking process...")
+            # Create chunks
+            chunk_files = chunk_audio(audio_path, OUTPUT_DIR, CHUNK_DURATION_MINUTES)
+            
+            # Clean up original large audio file
+            logger.info("🗑️  Cleaning up original large audio file...")
+            audio_path.unlink()
+            logger.info("✅ Original audio file deleted")
+            
+            # After chunking, run transcription and topic analysis
+            logger.info("📝 Starting transcription and topic analysis...")
+            try:
+                audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
+                logger.info("✅ Transcription completed. Now analyzing topics...")
+                segment_json = transcribe_segments.create_segment_json(audio_files)
+                with open("segments.json", "w") as f:
+                    import json
+                    json.dump(segment_json, f, indent=2)
+                logger.info("✅ Topic analysis and segment creation completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
+            
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                all_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+                
+                # Separate regular segments from interaction segments
+                video_segments = []
+                interaction_segments = []
+                
+                for segment_path in all_segments:
+                    segment_file = Path(segment_path)
+                    if "interactions" in str(segment_file):
+                        interaction_segments.append(segment_path)
+                    else:
+                        video_segments.append(segment_path)
+                
+                # Clean up intermediate files after successful video segment extraction
+                if all_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+                interaction_segments = []
+
+            # Upload video segments to S3
+            s3_urls = []
+            if all_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(all_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            logger.info("=" * 60)
+            logger.info("🎉 S3 VIDEO PROCESSING COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            logger.info(f"⏱️  Total processing time: {processing_time:.2f} seconds")
+            logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
+            logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
+            logger.info(f"✂️  Created {len(chunk_files)} chunks")
+            logger.info(f"🎬 Created {len(video_segments)} regular video segments")
+            logger.info(f"💬 Created {len(interaction_segments)} interaction segments")
+            logger.info(f"☁️  Uploaded {len(s3_urls)} segments to S3")
+            logger.info("=" * 60)
+            
+            return {
+                "message": f"S3 video processed successfully. Audio chunked into {len(chunk_files)} parts (original size: {audio_size_mb:.2f}MB)",
+                "s3_url": s3_url,
+                "chunk_files": chunk_files,
+                "total_chunks": len(chunk_files),
+                "video_segments": video_segments,
+                "total_video_segments": len(video_segments),
+                "interaction_segments": interaction_segments,
+                "total_interaction_segments": len(interaction_segments),
+                "segments_json_path": "segments.json",
+                "s3_urls": s3_urls,
+                "processing_time_seconds": processing_time
+            }
+        else:
+            logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
+            
+            # After chunking, run transcription and topic analysis
+            logger.info("📝 Starting transcription and topic analysis...")
+            try:
+                audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
+                logger.info("✅ Transcription completed. Now analyzing topics...")
+                segment_json = transcribe_segments.create_segment_json(audio_files)
+                with open("segments.json", "w") as f:
+                    import json
+                    json.dump(segment_json, f, indent=2)
+                logger.info("✅ Topic analysis and segment creation completed!")
+            except Exception as e:
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
+
+            # Run video segment extraction after transcription
+            logger.info("🎬 Starting video segment extraction after transcription...")
+            try:
+                all_segments = run_video_segment_extraction(video_path)
+                logger.info("✅ Video segment extraction completed!")
+                
+                # Separate regular segments from interaction segments
+                video_segments = []
+                interaction_segments = []
+                
+                for segment_path in all_segments:
+                    segment_file = Path(segment_path)
+                    if "interactions" in str(segment_file):
+                        interaction_segments.append(segment_path)
+                    else:
+                        video_segments.append(segment_path)
+                
+                # Clean up intermediate files after successful video segment extraction
+                if all_segments:
+                    cleanup_intermediate_files(video_path, audio_path)
+                else:
+                    logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error during video segment extraction after transcription: {str(e)}")
+                video_segments = []
+                interaction_segments = []
+
+            # Upload video segments to S3
+            s3_urls = []
+            if all_segments:
+                logger.info("☁️  Starting S3 upload for video segments...")
+                s3_urls = upload_video_segments_to_s3(all_segments)
+                logger.info(f"✅ S3 upload completed: {len(s3_urls)} segments uploaded")
+            
+            end_time = datetime.now()
+            processing_time = (end_time - start_time).total_seconds()
+            logger.info("=" * 60)
+            logger.info("🎉 S3 VIDEO PROCESSING COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            logger.info(f"⏱️  Total processing time: {processing_time:.2f} seconds")
+            logger.info(f"📊 Original video size: {video_size_mb:.2f}MB")
+            logger.info(f"🎵 Extracted audio size: {audio_size_mb:.2f}MB")
+            logger.info(f"🎬 Created {len(video_segments)} regular video segments")
+            logger.info(f"💬 Created {len(interaction_segments)} interaction segments")
+            logger.info(f"☁️  Uploaded {len(s3_urls)} segments to S3")
+            logger.info("=" * 60)
+            
+            return {
+                "message": f"S3 video processed successfully (audio size: {audio_size_mb:.2f}MB)",
+                "s3_url": s3_url,
+                "audio_file_path": str(audio_path),
+                "video_segments": video_segments,
+                "total_video_segments": len(video_segments),
+                "interaction_segments": interaction_segments,
+                "total_interaction_segments": len(interaction_segments),
+                "segments_json_path": "segments.json",
+                "s3_urls": s3_urls,
+                "processing_time_seconds": processing_time
+            }
+    
+    except Exception as e:
+        logger.error(f"❌ Error processing S3 video: {str(e)}")
+        # Clean up files on error
+        if 'video_path' in locals() and video_path is not None and video_path.exists():
+            logger.info("🗑️  Cleaning up video file due to error...")
+            video_path.unlink()
+        if 'audio_path' in locals() and audio_path is not None and audio_path.exists():
+            logger.info("🗑️  Cleaning up audio file due to error...")
+            audio_path.unlink()
+        raise Exception(f"Error processing S3 video: {str(e)}")
+
 # Main processing functions
 def process_video_file(video_path: Path, filename: str) -> dict:
     """Process uploaded video file through the complete pipeline"""
@@ -633,7 +1064,7 @@ def process_video_file(video_path: Path, filename: str) -> dict:
     
     start_time = datetime.now()
     logger.info("=" * 60)
-    logger.info("🚀 NEW VIDEO UPLOAD REQUEST RECEIVED")
+    logger.info("🚀 NEW VIDEO UPLOAD RECEIVED")
     logger.info("=" * 60)
     logger.info(f"📁 Original filename: {filename}")
     logger.info(f"🆔 Request ID: {start_time.strftime('%Y%m%d_%H%M%S')}")
@@ -1135,10 +1566,20 @@ def process_youtube_video(youtube_url: str) -> dict:
     secrets=[secret]
 )
 @modal.fastapi_endpoint(method="POST")
-async def extract_audio_endpoint(video_file: UploadFile = File(...)):
-    """Extract audio from uploaded video file and process through pipeline"""
-    print("🚀 extract_audio_endpoint called")
+async def upload_video_to_s3_endpoint(video_file: UploadFile = File(...)):
+    """Upload video file to S3 using multipart upload"""
+    print("🚀 upload_video_to_s3_endpoint called")
     print(f"📁 Received file: {video_file.filename}")
+    
+    # Add immediate logging to stdout and stderr
+    import sys
+    sys.stdout.write("🔍 DEBUG: Function started - stdout\n")
+    sys.stdout.flush()
+    sys.stderr.write("🔍 DEBUG: Function started - stderr\n")
+    sys.stderr.flush()
+    
+    logger.info("🚀 upload_video_to_s3_endpoint called")
+    logger.info(f"📁 Received file: {video_file.filename}")
     
     # Validate file type
     allowed_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
@@ -1155,6 +1596,7 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
     file_size_mb = len(content) / (1024 * 1024)
     file_size_gb = file_size_mb / 1024
     print(f"📊 File size: {file_size_mb:.2f} MB ({file_size_gb:.2f} GB)")
+    logger.info(f"📊 File size: {file_size_mb:.2f} MB ({file_size_gb:.2f} GB)")
     
     # Validate file size using our new function
     if not validate_file_size(file_size_mb):
@@ -1165,19 +1607,20 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
     
     # Add progress logging for large files
     if file_size_gb > 2:
-        print(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to process...")
+        print(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to upload...")
+        logger.warning(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to upload...")
     elif file_size_mb > 100:
-        print(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to process...")
+        print(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to upload...")
+        logger.info(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to upload...")
     
     await video_file.seek(0)  # Reset file pointer after reading
     
     try:
         # Create directories
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
         
         print("📂 Directories created successfully")
+        logger.info("📂 Directories created successfully")
         
         # Save uploaded file with streaming for large files
         file_id = str(uuid.uuid4())
@@ -1187,12 +1630,15 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
         # Use optimized streaming for large files
         if file_size_gb > 2:
             print(f"📤 Streaming very large file ({file_size_gb:.2f}GB) to disk with optimized chunks...")
+            logger.info(f"📤 Streaming very large file ({file_size_gb:.2f}GB) to disk with optimized chunks...")
             chunk_size = 32768  # 32KB chunks for very large files
         elif file_size_mb > 100:
             print(f"📤 Streaming large file ({file_size_mb:.2f}MB) to disk...")
+            logger.info(f"📤 Streaming large file ({file_size_mb:.2f}MB) to disk...")
             chunk_size = 16384  # 16KB chunks for large files
         else:
             print(f"📤 Writing small file ({file_size_mb:.2f}MB) to disk...")
+            logger.info(f"📤 Writing small file ({file_size_mb:.2f}MB) to disk...")
             chunk_size = 8192  # 8KB chunks for normal files
         
         # Reset file pointer and stream to disk
@@ -1204,31 +1650,55 @@ async def extract_audio_endpoint(video_file: UploadFile = File(...)):
         print(f"💾 File saved: {video_filename}")
         logger.info(f"📁 Saved uploaded file: {video_filename}")
         
-        # Process the video file
-        print("🔄 Starting video processing...")
-        result = process_video_file(video_path, video_file.filename)
+        # Upload video to S3 via multipart upload
+        print("☁️  Starting S3 multipart upload for video...")
+        logger.info("☁️  Starting S3 multipart upload for video...")
+        video_upload_info = upload_video_to_s3_multipart(video_path, video_file.filename)
         
-        print("✅ Processing completed successfully")
-        return AudioExtractionResponse(**result)
+        if video_upload_info:
+            print(f"✅ Video uploaded to S3: {video_upload_info['s3_url']}")
+            logger.info(f"✅ Video uploaded to S3: {video_upload_info['s3_url']}")
+            # Clean up local file after successful upload
+            video_path.unlink()
+            print("🗑️  Local file cleaned up after S3 upload")
+            logger.info("🗑️  Local file cleaned up after S3 upload")
+        else:
+            print("❌ Failed to upload video to S3")
+            logger.error("❌ Failed to upload video to S3")
+            raise HTTPException(status_code=500, detail="Failed to upload video to S3")
+        
+        print("✅ S3 upload completed successfully")
+        logger.info("✅ S3 upload completed successfully")
+        return S3UploadResponse(**video_upload_info)
         
     except Exception as e:
-        print(f"❌ Error in extract_audio_endpoint: {str(e)}")
-        logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
+        print(f"❌ Error in upload_video_to_s3_endpoint: {str(e)}")
+        logger.error(f"❌ Error in upload_video_to_s3_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error uploading video to S3: {str(e)}")
 
 @app.function(
     image=image,
     cpu=4.0,  # 4 CPU cores for heavy video processing
     memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
-    timeout=7200,  # 2 hours timeout for processing
+    timeout=14400,  # 4 hours timeout for very large file processing
     volumes={"/data": volume},
     secrets=[secret]
 )
 @modal.fastapi_endpoint(method="POST")
-async def process_youtube_endpoint(request: YouTubeProcessRequest):
-    """Process YouTube video URL through the complete pipeline"""
-    print("🚀 process_youtube_endpoint called")
-    print(f"📺 YouTube URL: {request.youtube_url}")
+async def extract_audio_endpoint(request: S3UploadRequest):
+    """Extract audio from S3 video URL and process through pipeline"""
+    print("🚀 extract_audio_endpoint called")
+    print(f"☁️  S3 URL: {request.s3_url}")
+    
+    # Add immediate logging to stdout and stderr
+    import sys
+    sys.stdout.write("🔍 DEBUG: Extract audio function started - stdout\n")
+    sys.stdout.flush()
+    sys.stderr.write("🔍 DEBUG: Extract audio function started - stderr\n")
+    sys.stderr.flush()
+    
+    logger.info("🚀 extract_audio_endpoint called")
+    logger.info(f"☁️  S3 URL: {request.s3_url}")
     
     try:
         # Create directories
@@ -1237,15 +1707,19 @@ async def process_youtube_endpoint(request: YouTubeProcessRequest):
         VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
         
         print("📂 Directories created successfully")
+        logger.info("📂 Directories created successfully")
         
-        # Process the YouTube video
-        print("🔄 Starting YouTube video processing...")
-        result = process_youtube_video(request.youtube_url)
+        # Process the video from S3 URL
+        print("🔄 Starting video processing from S3...")
+        logger.info("🔄 Starting video processing from S3...")
+        result = process_video_from_s3(request.s3_url)
         
-        print("✅ YouTube processing completed successfully")
-        return YouTubeProcessResponse(**result)
+        print("✅ Processing completed successfully")
+        logger.info("✅ Processing completed successfully")
+        return AudioExtractionResponse(**result)
         
     except Exception as e:
-        print(f"❌ Error in process_youtube_endpoint: {str(e)}")
-        logger.error(f"❌ Error in process_youtube_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing YouTube video: {str(e)}")
+        print(f"❌ Error in extract_audio_endpoint: {str(e)}")
+        logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing video from S3: {str(e)}")
+

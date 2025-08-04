@@ -616,15 +616,14 @@
           console.log("Getting presigned URL for:", filename, contentType);
           showStatus("🔍 Getting presigned URL...", "info");
 
+          // Use FormData to avoid CORS preflight
+          const formData = new FormData();
+          formData.append("filename", filename);
+          formData.append("content_type", contentType);
+
           const response = await fetch(API_BASE_URL, {
             method: "POST",
-            headers: {
-              "Content-Type": "text/plain", // Use text/plain to avoid preflight
-            },
-            body: JSON.stringify({
-              filename: filename,
-              content_type: contentType,
-            }),
+            body: formData,
             redirect: "follow", // Explicitly follow redirects
           });
 
@@ -727,14 +726,13 @@
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 minutes timeout
 
+          // Use FormData to avoid CORS preflight
+          const formData = new FormData();
+          formData.append("s3_url", s3Url);
+
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
-            headers: {
-              "Content-Type": "text/plain", // Use text/plain to avoid preflight
-            },
-            body: JSON.stringify({
-              s3_url: s3Url,
-            }),
+            body: formData,
             signal: controller.signal,
             redirect: "follow", // Explicitly follow redirects
           });

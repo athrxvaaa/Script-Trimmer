@@ -713,11 +713,18 @@
         processBtn.disabled = true;
         processBtn.innerHTML =
           '<span class="loading"></span>Processing video...';
-        updateProgress(0, "Starting video processing...");
+        updateProgress(
+          0,
+          "Starting video processing (this may take 20-30 minutes for large videos)..."
+        );
 
         try {
           console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
           console.log("📤 Request payload:", { s3_url: s3Url });
+
+          // Create AbortController for timeout - 10 minutes for initial request
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
 
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
@@ -727,7 +734,10 @@
             body: JSON.stringify({
               s3_url: s3Url,
             }),
+            signal: controller.signal,
           });
+
+          clearTimeout(timeoutId);
 
           console.log("📥 Processing response status:", response.status);
           console.log("📥 Processing response headers:", response.headers);
@@ -746,7 +756,15 @@
           }
         } catch (error) {
           console.error("❌ Processing error:", error);
-          showStatus(`Processing failed: ${error.message}`, "error");
+          if (error.name === "AbortError") {
+            showStatus(
+              "⏰ Request timeout - Large videos take 20-30 minutes to process. The backend may still be working. Please wait and refresh the page in 20-30 minutes to check for results.",
+              "warning"
+            );
+            updateProgress(50, "Processing may be running in background...");
+          } else {
+            showStatus(`Processing failed: ${error.message}`, "error");
+          }
         } finally {
           processBtn.disabled = false;
           processBtn.innerHTML = "⚙️ Process Video";

@@ -722,9 +722,9 @@
           console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
           console.log("📤 Request payload:", { s3_url: s3Url });
 
-          // Create AbortController for timeout - 10 minutes for initial request
+          // Create AbortController for timeout - 30 minutes for large videos
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
+          const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 minutes timeout
 
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
@@ -758,7 +758,7 @@
           console.error("❌ Processing error:", error);
           if (error.name === "AbortError") {
             showStatus(
-              "⏰ Request timeout - Large videos take 20-30 minutes to process. The backend may still be working. Please wait and refresh the page in 20-30 minutes to check for results.",
+              "⏰ Request timeout after 30 minutes - Very large videos may take longer. The backend may still be working. Please wait and refresh the page later to check for results.",
               "warning"
             );
             updateProgress(50, "Processing may be running in background...");

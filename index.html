@@ -625,6 +625,7 @@
               filename: filename,
               content_type: contentType,
             }),
+            redirect: "follow", // Explicitly follow redirects
           });
 
           console.log("Response status:", response.status);
@@ -735,6 +736,7 @@
               s3_url: s3Url,
             }),
             signal: controller.signal,
+            redirect: "follow", // Explicitly follow redirects
           });
 
           clearTimeout(timeoutId);

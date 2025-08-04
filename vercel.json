@@ -4,9 +4,17 @@
     {
       "src": "index.html",
       "use": "@vercel/static"
+    },
+    {
+      "src": "s3_processor.html",
+      "use": "@vercel/static"
     }
   ],
   "rewrites": [
+    {
+      "source": "/s3",
+      "destination": "/s3_processor.html"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

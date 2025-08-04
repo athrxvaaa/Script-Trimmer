@@ -619,7 +619,7 @@
           const response = await fetch(API_BASE_URL, {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
+              "Content-Type": "text/plain", // Use text/plain to avoid preflight
             },
             body: JSON.stringify({
               filename: filename,
@@ -730,7 +730,7 @@
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
+              "Content-Type": "text/plain", // Use text/plain to avoid preflight
             },
             body: JSON.stringify({
               s3_url: s3Url,

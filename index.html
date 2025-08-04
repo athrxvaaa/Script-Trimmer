@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Script Trimmer - Video Processing Tool</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 30px;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 2.5rem;
+        margin-bottom: 10px;
+        font-weight: 300;
+      }
+
+      .header p {
+        font-size: 1.1rem;
+        opacity: 0.9;
+      }
+
+      .main-content {
+        padding: 40px;
+      }
+
+      .upload-section {
+        text-align: center;
+        margin-bottom: 40px;
+      }
+
+      .upload-area {
+        border: 3px dashed #667eea;
+        border-radius: 15px;
+        padding: 40px;
+        margin: 20px 0;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        background: #f8f9ff;
+      }
+
+      .upload-area:hover {
+        border-color: #764ba2;
+        background: #f0f2ff;
+      }
+
+      .upload-area.dragover {
+        border-color: #764ba2;
+        background: #e8ecff;
+        transform: scale(1.02);
+      }
+
+      .upload-icon {
+        font-size: 3rem;
+        color: #667eea;
+        margin-bottom: 20px;
+      }
+
+      .upload-text {
+        font-size: 1.2rem;
+        color: #666;
+        margin-bottom: 10px;
+      }
+
+      .upload-hint {
+        font-size: 0.9rem;
+        color: #999;
+      }
+
+      .file-input {
+        display: none;
+      }
+
+      .progress-section {
+        margin: 30px 0;
+        display: none;
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 10px;
+        background: #e0e0e0;
+        border-radius: 5px;
+        overflow: hidden;
+        margin: 10px 0;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+
+      .status {
+        padding: 15px;
+        border-radius: 10px;
+        margin: 10px 0;
+        font-weight: 500;
+      }
+
+      .status.info {
+        background: #e3f2fd;
+        color: #1976d2;
+        border-left: 4px solid #1976d2;
+      }
+
+      .status.success {
+        background: #e8f5e8;
+        color: #2e7d32;
+        border-left: 4px solid #2e7d32;
+      }
+
+      .status.error {
+        background: #ffebee;
+        color: #c62828;
+        border-left: 4px solid #c62828;
+      }
+
+      .status.warning {
+        background: #fff3e0;
+        color: #f57c00;
+        border-left: 4px solid #f57c00;
+      }
+
+      .btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        border-radius: 25px;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin: 10px 5px;
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+      }
+
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .results-section {
+        margin-top: 40px;
+        display: none;
+      }
+
+      .results-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+      }
+
+      .result-card {
+        background: #f8f9ff;
+        border-radius: 15px;
+        padding: 20px;
+        border-left: 4px solid #667eea;
+      }
+
+      .result-card h3 {
+        color: #667eea;
+        margin-bottom: 10px;
+      }
+
+      .result-item {
+        margin: 10px 0;
+        padding: 10px;
+        background: white;
+        border-radius: 8px;
+        border: 1px solid #e0e0e0;
+      }
+
+      .result-item a {
+        color: #667eea;
+        text-decoration: none;
+      }
+
+      .result-item a:hover {
+        text-decoration: underline;
+      }
+
+      .loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #667eea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .file-info {
+        background: #f8f9ff;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 20px 0;
+        display: none;
+      }
+
+      .file-info h3 {
+        color: #667eea;
+        margin-bottom: 10px;
+      }
+
+      .file-details {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .file-detail {
+        font-size: 0.9rem;
+        color: #666;
+      }
+
+      .file-detail strong {
+        color: #333;
+      }
+
+      .video-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+      }
+
+      .video-item {
+        background: #f8f9ff;
+        border-radius: 10px;
+        padding: 15px;
+        border: 1px solid #e0e0e0;
+      }
+
+      .video-item h4 {
+        margin: 0 0 10px 0;
+        color: #667eea;
+        font-size: 1rem;
+      }
+
+      .video-info {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 10px;
+        font-size: 0.8rem;
+        color: #666;
+      }
+
+      .video-info small {
+        background: #e8f0fe;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+
+      .video-preview-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+      }
+
+      .video-preview-item {
+        background: #f8f9ff;
+        border-radius: 12px;
+        padding: 15px;
+        border: 1px solid #e0e0e0;
+        transition: transform 0.2s ease;
+      }
+
+      .video-preview-item:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+
+      .video-preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .video-preview-header h4 {
+        margin: 0;
+        color: #667eea;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .video-size {
+        background: #e8f0fe;
+        color: #667eea;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+      }
+
+      .video-preview {
+        width: 100%;
+        border-radius: 8px;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🎬 Script Trimmer</h1>
+        <p>Upload your video and let AI process it into meaningful segments</p>
+      </div>
+
+      <div class="main-content">
+        <!-- Upload Section -->
+        <div class="upload-section">
+          <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <div class="upload-text">
+              Drop your video file here or click to browse
+            </div>
+            <div class="upload-hint">
+              Supports MP4, AVI, MOV, MKV, FLV, WMV, WEBM, M4V, 3GP (Max 10GB)
+            </div>
+            <input
+              type="file"
+              id="fileInput"
+              class="file-input"
+              accept="video/*"
+            />
+          </div>
+        </div>
+
+        <!-- File Info -->
+        <div class="file-info" id="fileInfo">
+          <h3>📋 File Information</h3>
+          <div class="file-details">
+            <div class="file-detail">
+              <strong>Name:</strong> <span id="fileName"></span>
+            </div>
+            <div class="file-detail">
+              <strong>Size:</strong> <span id="fileSize"></span>
+            </div>
+            <div class="file-detail">
+              <strong>Type:</strong> <span id="fileType"></span>
+            </div>
+            <div class="file-detail">
+              <strong>Duration:</strong> <span id="fileDuration"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress Section -->
+        <div class="progress-section" id="progressSection">
+          <h3>🔄 Processing Progress</h3>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div id="progressText">Ready to start...</div>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="statusContainer"></div>
+
+        <!-- Action Buttons -->
+        <div style="text-align: center; margin: 30px 0">
+          <button class="btn" id="uploadBtn" style="display: none">
+            🚀 Upload to S3
+          </button>
+          <button class="btn" id="processBtn" style="display: none">
+            ⚙️ Process Video
+          </button>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection">
+          <h3>📊 Processing Results</h3>
+          <div class="results-grid" id="resultsGrid"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // API Configuration - Updated for boto3 deployment
+      const API_BASE_URL =
+        "https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run";
+      const PROCESSING_API_URL =
+        "https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run";
+
+      // Global variables
+      let selectedFile = null;
+      let presignedUrl = null;
+      let s3Url = null;
+
+      // DOM elements
+      const uploadArea = document.getElementById("uploadArea");
+      const fileInput = document.getElementById("fileInput");
+      const fileInfo = document.getElementById("fileInfo");
+      const progressSection = document.getElementById("progressSection");
+      const statusContainer = document.getElementById("statusContainer");
+      const uploadBtn = document.getElementById("uploadBtn");
+      const processBtn = document.getElementById("processBtn");
+      const resultsSection = document.getElementById("resultsSection");
+
+      // Event listeners
+      uploadArea.addEventListener("click", () => fileInput.click());
+      uploadArea.addEventListener("dragover", handleDragOver);
+      uploadArea.addEventListener("dragleave", handleDragLeave);
+      uploadArea.addEventListener("drop", handleDrop);
+      fileInput.addEventListener("change", handleFileSelect);
+      uploadBtn.addEventListener("click", handleUpload);
+      processBtn.addEventListener("click", handleProcess);
+
+      // Drag and drop handlers
+      function handleDragOver(e) {
+        e.preventDefault();
+        uploadArea.classList.add("dragover");
+      }
+
+      function handleDragLeave(e) {
+        e.preventDefault();
+        uploadArea.classList.remove("dragover");
+      }
+
+      function handleDrop(e) {
+        e.preventDefault();
+        uploadArea.classList.remove("dragover");
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          handleFile(files[0]);
+        }
+      }
+
+      // File selection handler
+      function handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (file) {
+          handleFile(file);
+        }
+      }
+
+      // File handling
+      function handleFile(file) {
+        // Validate file type
+        const allowedTypes = [
+          "video/mp4",
+          "video/avi",
+          "video/mov",
+          "video/mkv",
+          "video/flv",
+          "video/wmv",
+          "video/webm",
+          "video/m4v",
+          "video/3gp",
+        ];
+        if (!allowedTypes.includes(file.type)) {
+          showStatus("Please select a valid video file.", "error");
+          return;
+        }
+
+        // Validate file size (10GB max)
+        const maxSize = 10 * 1024 * 1024 * 1024; // 10GB in bytes
+        if (file.size > maxSize) {
+          showStatus(
+            "File size exceeds 10GB limit. Please select a smaller file.",
+            "error"
+          );
+          return;
+        }
+
+        selectedFile = file;
+        displayFileInfo(file);
+        showStatus(
+          'File selected successfully! Click "Upload to S3" to continue.',
+          "success"
+        );
+        uploadBtn.style.display = "inline-block";
+        processBtn.style.display = "none";
+      }
+
+      // Display file information
+      function displayFileInfo(file) {
+        const fileName = document.getElementById("fileName");
+        const fileSize = document.getElementById("fileSize");
+        const fileType = document.getElementById("fileType");
+        const fileDuration = document.getElementById("fileDuration");
+
+        fileName.textContent = file.name;
+        fileSize.textContent = formatFileSize(file.size);
+        fileType.textContent = file.type;
+
+        // Create video element to get duration
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.onloadedmetadata = function () {
+          const duration = Math.round(video.duration);
+          const minutes = Math.floor(duration / 60);
+          const seconds = duration % 60;
+          fileDuration.textContent = `${minutes}:${seconds
+            .toString()
+            .padStart(2, "0")}`;
+        };
+        video.src = URL.createObjectURL(file);
+
+        fileInfo.style.display = "block";
+      }
+
+      // Format file size
+      function formatFileSize(bytes) {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+      }
+
+      // Upload to S3
+      async function handleUpload() {
+        if (!selectedFile) {
+          showStatus("Please select a file first.", "error");
+          return;
+        }
+
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML =
+          '<span class="loading"></span>Getting presigned URL...';
+        progressSection.style.display = "block";
+        updateProgress(0, "Getting presigned URL...");
+
+        try {
+          // Step 1: Get presigned URL
+          const presignedResponse = await getPresignedUrl(
+            selectedFile.name,
+            selectedFile.type
+          );
+          if (!presignedResponse.success) {
+            throw new Error(presignedResponse.error);
+          }
+
+          presignedUrl = presignedResponse.presigned_url;
+          s3Url = presignedResponse.s3_url;
+
+          updateProgress(20, "Presigned URL received. Uploading to S3...");
+          uploadBtn.innerHTML =
+            '<span class="loading"></span>Uploading to S3...';
+
+          // Step 2: Upload to S3
+          const uploadSuccess = await uploadToS3WithProgress(
+            presignedUrl,
+            selectedFile
+          );
+          if (!uploadSuccess) {
+            throw new Error("Failed to upload file to S3");
+          }
+
+          updateProgress(100, "Upload completed successfully!");
+          showStatus(
+            'Video uploaded to S3 successfully! Click "Process Video" to continue.',
+            "success"
+          );
+
+          uploadBtn.style.display = "none";
+          processBtn.style.display = "inline-block";
+          processBtn.disabled = false;
+        } catch (error) {
+          console.error("Upload error:", error);
+          showStatus(`Upload failed: ${error.message}`, "error");
+          uploadBtn.disabled = false;
+          uploadBtn.innerHTML = "🚀 Upload to S3";
+        }
+      }
+
+      // Get presigned URL
+      async function getPresignedUrl(filename, contentType) {
+        try {
+          console.log("Getting presigned URL for:", filename, contentType);
+          showStatus("🔍 Getting presigned URL...", "info");
+
+          const response = await fetch(API_BASE_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              filename: filename,
+              content_type: contentType,
+            }),
+          });
+
+          console.log("Response status:", response.status);
+          const data = await response.json();
+          console.log("Response data:", data);
+
+          if (response.ok) {
+            showStatus("✅ Presigned URL received successfully!", "success");
+            return { success: true, ...data };
+          } else {
+            showStatus(
+              `❌ Failed to get presigned URL: ${data.detail}`,
+              "error"
+            );
+            return {
+              success: false,
+              error: data.detail || "Failed to get presigned URL",
+            };
+          }
+        } catch (error) {
+          console.error("Fetch error:", error);
+          showStatus(`❌ Network error: ${error.message}`, "error");
+          return { success: false, error: error.message };
+        }
+      }
+
+      // Upload to S3 with progress
+      async function uploadToS3WithProgress(presignedUrl, file) {
+        return new Promise((resolve) => {
+          console.log("Uploading to S3 with presigned URL:", presignedUrl);
+          console.log("File type:", file.type);
+          console.log("File size:", file.size);
+          showStatus("☁️ Starting S3 upload...", "info");
+
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.addEventListener("progress", (e) => {
+            if (e.lengthComputable) {
+              const percentComplete = (e.loaded / e.total) * 100;
+              const progress = 20 + percentComplete * 0.8; // 20% to 100%
+              updateProgress(
+                progress,
+                `Uploading: ${Math.round(percentComplete)}%`
+              );
+            }
+          });
+
+          xhr.addEventListener("load", () => {
+            console.log("XHR load event - status:", xhr.status);
+            console.log("XHR response:", xhr.responseText);
+            if (xhr.status === 200) {
+              showStatus("✅ S3 upload completed successfully!", "success");
+              resolve(true);
+            } else {
+              console.error("Upload failed with status:", xhr.status);
+              showStatus(
+                `❌ S3 upload failed with status: ${xhr.status}`,
+                "error"
+              );
+              resolve(false);
+            }
+          });
+
+          xhr.addEventListener("error", (e) => {
+            console.error("XHR error:", e);
+            showStatus("❌ S3 upload network error", "error");
+            resolve(false);
+          });
+
+          xhr.open("PUT", presignedUrl);
+          xhr.setRequestHeader("Content-Type", file.type);
+          xhr.send(file);
+        });
+      }
+
+      // Process video
+      async function handleProcess() {
+        if (!s3Url) {
+          showStatus(
+            "No S3 URL available. Please upload a file first.",
+            "error"
+          );
+          return;
+        }
+
+        processBtn.disabled = true;
+        processBtn.innerHTML =
+          '<span class="loading"></span>Processing video...';
+        updateProgress(0, "Starting video processing...");
+
+        try {
+          console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
+          console.log("📤 Request payload:", { s3_url: s3Url });
+
+          const response = await fetch(PROCESSING_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              s3_url: s3Url,
+            }),
+          });
+
+          console.log("📥 Processing response status:", response.status);
+          console.log("📥 Processing response headers:", response.headers);
+
+          const data = await response.json();
+          console.log("📊 Processing response data:", data);
+
+          if (response.ok) {
+            updateProgress(100, "Processing completed!");
+            showStatus("Video processing completed successfully!", "success");
+            displayResults(data);
+          } else {
+            console.error("❌ Processing failed with status:", response.status);
+            console.error("❌ Error details:", data);
+            throw new Error(data.detail || data.message || "Processing failed");
+          }
+        } catch (error) {
+          console.error("❌ Processing error:", error);
+          showStatus(`Processing failed: ${error.message}`, "error");
+        } finally {
+          processBtn.disabled = false;
+          processBtn.innerHTML = "⚙️ Process Video";
+        }
+      }
+
+      // Display results
+      function displayResults(data) {
+        console.log("📊 Displaying results:", data);
+        resultsSection.style.display = "block";
+        const resultsGrid = document.getElementById("resultsGrid");
+        resultsGrid.innerHTML = "";
+
+        // Video segments with preview
+        if (data.s3_urls && data.s3_urls.length > 0) {
+          const videoSegments = data.s3_urls.filter(
+            (item) => item.segment_type === "topic"
+          );
+          if (videoSegments.length > 0) {
+            const videoCard = createVideoPreviewCard(
+              "Video Segments",
+              videoSegments
+            );
+            resultsGrid.appendChild(videoCard);
+          }
+        }
+
+        // Interaction segments with preview
+        if (data.s3_urls && data.s3_urls.length > 0) {
+          const interactionSegments = data.s3_urls.filter(
+            (item) => item.segment_type === "interaction"
+          );
+          if (interactionSegments.length > 0) {
+            const interactionCard = createVideoPreviewCard(
+              "Interaction Segments",
+              interactionSegments
+            );
+            resultsGrid.appendChild(interactionCard);
+          }
+        }
+      }
+
+      // Create result card
+      function createResultCard(title, items, type) {
+        const card = document.createElement("div");
+        card.className = "result-card";
+
+        let itemsHtml = "";
+        items.forEach((item, index) => {
+          if (typeof item === "string") {
+            // For file paths, just show the filename
+            const filename = item.split("/").pop();
+            itemsHtml += `<div class="result-item">📁 ${filename}</div>`;
+          } else if (item.url) {
+            // For S3 URLs, show as clickable link
+            itemsHtml += `<div class="result-item"><a href="${
+              item.url
+            }" target="_blank">🎬 ${
+              item.filename || `File ${index + 1}`
+            }</a></div>`;
+          }
+        });
+
+        card.innerHTML = `
+                <h3>${title}</h3>
+                ${itemsHtml}
+            `;
+        return card;
+      }
+
+      // Create video preview card
+      function createVideoPreviewCard(title, segments) {
+        const card = document.createElement("div");
+        card.className = "result-card";
+
+        let videosHtml = "";
+        segments.forEach((item, index) => {
+          if (item.s3_url) {
+            videosHtml += `
+              <div class="video-preview-item">
+                <div class="video-preview-header">
+                  <h4>🎬 ${item.filename}</h4>
+                  <span class="video-size">${
+                    item.size_mb ? item.size_mb.toFixed(1) + " MB" : "N/A"
+                  }</span>
+                </div>
+                <video controls preload="metadata" class="video-preview">
+                  <source src="${item.s3_url}" type="video/mp4">
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            `;
+          }
+        });
+
+        card.innerHTML = `
+          <h3>${title}</h3>
+          <div class="video-preview-grid">
+            ${videosHtml}
+          </div>
+        `;
+        return card;
+      }
+
+      // Update progress
+      function updateProgress(percent, text) {
+        const progressFill = document.getElementById("progressFill");
+        const progressText = document.getElementById("progressText");
+
+        progressFill.style.width = percent + "%";
+        progressText.textContent = text;
+      }
+
+      // Show status message
+      function showStatus(message, type = "info") {
+        const statusDiv = document.createElement("div");
+        statusDiv.className = `status ${type}`;
+        statusDiv.innerHTML = message;
+
+        statusContainer.appendChild(statusDiv);
+
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+          if (statusDiv.parentNode) {
+            statusDiv.parentNode.removeChild(statusDiv);
+          }
+        }, 5000);
+      }
+    </script>
+  </body>
+</html>

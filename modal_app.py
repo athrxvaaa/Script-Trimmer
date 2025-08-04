@@ -102,12 +102,7 @@ class PresignedUrlResponse(BaseModel):
 class S3UploadRequest(BaseModel):
     s3_url: str
 
-class S3UploadResponse(BaseModel):
-    message: str
-    s3_url: str
-    s3_key: str
-    size_mb: float
-    upload_type: str
+
 
 class YouTubeProcessRequest(BaseModel):
     youtube_url: str
@@ -775,40 +770,49 @@ def run_video_segment_extraction(video_path: Path) -> List[str]:
         return []
 
 def download_video_from_s3(s3_url: str, output_dir: Path) -> Optional[Path]:
-    """Download video from S3 URL and return the file path"""
+    """Download video from S3 URL using boto3 and return the file path"""
     try:
         logger.info(f"📥 Starting S3 video download: {s3_url}")
+        
+        # Parse S3 URL to get bucket and key
+        # URL format: https://bucket-name.s3.region.amazonaws.com/key
+        url_parts = s3_url.replace('https://', '').split('/')
+        bucket_name = url_parts[0].split('.')[0]  # Extract bucket name
+        s3_key = '/'.join(url_parts[1:])  # Extract the key
+        
+        logger.info(f"🪣 S3 Bucket: {bucket_name}")
+        logger.info(f"🔑 S3 Key: {s3_key}")
         
         # Generate a unique filename
         file_id = str(uuid.uuid4())
         video_filename = f"{file_id}_s3_video.mp4"
         video_path = output_dir / video_filename
         
-        # Download using curl or wget
-        logger.info("⬇️  Downloading video from S3...")
-        
-        # Try curl first, then wget as fallback
-        download_cmd = [
-            'curl', '-L', '-o', str(video_path), s3_url
-        ]
-        
-        result = subprocess.run(download_cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0 or not video_path.exists():
-            logger.warning("⚠️  Curl failed, trying wget...")
-            download_cmd = [
-                'wget', '-O', str(video_path), s3_url
-            ]
-            result = subprocess.run(download_cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0 or not video_path.exists():
-            logger.error(f"❌ Failed to download video from S3: {result.stderr}")
+        # Get S3 client
+        s3_client = get_s3_client()
+        if not s3_client:
+            logger.error("❌ S3 client not available")
             return None
         
-        # Get downloaded file size
-        file_size_mb = get_file_size_mb(video_path)
-        logger.info(f"✅ S3 video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
-        return video_path
+        # Download using boto3
+        logger.info("⬇️  Downloading video from S3 using boto3...")
+        
+        try:
+            s3_client.download_file(bucket_name, s3_key, str(video_path))
+            
+            # Verify file was downloaded
+            if not video_path.exists():
+                logger.error("❌ File not found after boto3 download")
+                return None
+            
+            # Get downloaded file size
+            file_size_mb = get_file_size_mb(video_path)
+            logger.info(f"✅ S3 video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
+            return video_path
+            
+        except Exception as e:
+            logger.error(f"❌ boto3 download failed: {str(e)}")
+            return None
         
     except Exception as e:
         logger.error(f"❌ Error downloading video from S3: {str(e)}")
@@ -1617,125 +1621,6 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
         print(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         logger.error(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating presigned URL: {str(e)}")
-
-@app.function(
-    image=image,
-    cpu=4.0,  # 4 CPU cores for heavy video processing
-    memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
-    timeout=14400,  # 4 hours timeout for very large file processing
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="POST")
-async def upload_video_to_s3_endpoint(video_file: UploadFile = File(...)):
-    """Upload video file to S3 using multipart upload"""
-    print("🚀 upload_video_to_s3_endpoint called")
-    print(f"📁 Received file: {video_file.filename}")
-    
-    # Add immediate logging to stdout and stderr
-    import sys
-    sys.stdout.write("🔍 DEBUG: Function started - stdout\n")
-    sys.stdout.flush()
-    sys.stderr.write("🔍 DEBUG: Function started - stderr\n")
-    sys.stderr.flush()
-    
-    logger.info("🚀 upload_video_to_s3_endpoint called")
-    logger.info(f"📁 Received file: {video_file.filename}")
-    
-    # Validate file type
-    allowed_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.3gp']
-    file_extension = Path(video_file.filename).suffix.lower()
-    
-    if file_extension not in allowed_extensions:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid file type. Please upload a video file. Allowed formats: {', '.join(allowed_extensions)}"
-        )
-    
-    # Check file size with improved validation
-    content = await video_file.read()
-    file_size_mb = len(content) / (1024 * 1024)
-    file_size_gb = file_size_mb / 1024
-    print(f"📊 File size: {file_size_mb:.2f} MB ({file_size_gb:.2f} GB)")
-    logger.info(f"📊 File size: {file_size_mb:.2f} MB ({file_size_gb:.2f} GB)")
-    
-    # Validate file size using our new function
-    if not validate_file_size(file_size_mb):
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large ({file_size_gb:.2f}GB). Maximum size is {MAX_FILE_SIZE_GB}GB. Please compress your video or use a smaller file."
-        )
-    
-    # Add progress logging for large files
-    if file_size_gb > 2:
-        print(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to upload...")
-        logger.warning(f"⚠️  Very large file detected ({file_size_gb:.2f}GB). This may take significant time to upload...")
-    elif file_size_mb > 100:
-        print(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to upload...")
-        logger.info(f"⚠️  Large file detected ({file_size_mb:.2f}MB). This may take some time to upload...")
-    
-    await video_file.seek(0)  # Reset file pointer after reading
-    
-    try:
-        # Create directories
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        
-        print("📂 Directories created successfully")
-        logger.info("📂 Directories created successfully")
-        
-        # Save uploaded file with streaming for large files
-        file_id = str(uuid.uuid4())
-        video_filename = f"{file_id}_{video_file.filename}"
-        video_path = UPLOAD_DIR / video_filename
-        
-        # Use optimized streaming for large files
-        if file_size_gb > 2:
-            print(f"📤 Streaming very large file ({file_size_gb:.2f}GB) to disk with optimized chunks...")
-            logger.info(f"📤 Streaming very large file ({file_size_gb:.2f}GB) to disk with optimized chunks...")
-            chunk_size = 32768  # 32KB chunks for very large files
-        elif file_size_mb > 100:
-            print(f"📤 Streaming large file ({file_size_mb:.2f}MB) to disk...")
-            logger.info(f"📤 Streaming large file ({file_size_mb:.2f}MB) to disk...")
-            chunk_size = 16384  # 16KB chunks for large files
-        else:
-            print(f"📤 Writing small file ({file_size_mb:.2f}MB) to disk...")
-            logger.info(f"📤 Writing small file ({file_size_mb:.2f}MB) to disk...")
-            chunk_size = 8192  # 8KB chunks for normal files
-        
-        # Reset file pointer and stream to disk
-        await video_file.seek(0)
-        with open(video_path, "wb") as f:
-            while chunk := await video_file.read(chunk_size):
-                f.write(chunk)
-        
-        print(f"💾 File saved: {video_filename}")
-        logger.info(f"📁 Saved uploaded file: {video_filename}")
-        
-        # Upload video to S3 via multipart upload
-        print("☁️  Starting S3 multipart upload for video...")
-        logger.info("☁️  Starting S3 multipart upload for video...")
-        video_upload_info = upload_video_to_s3_multipart(video_path, video_file.filename)
-        
-        if video_upload_info:
-            print(f"✅ Video uploaded to S3: {video_upload_info['s3_url']}")
-            logger.info(f"✅ Video uploaded to S3: {video_upload_info['s3_url']}")
-            # Clean up local file after successful upload
-            video_path.unlink()
-            print("🗑️  Local file cleaned up after S3 upload")
-            logger.info("🗑️  Local file cleaned up after S3 upload")
-        else:
-            print("❌ Failed to upload video to S3")
-            logger.error("❌ Failed to upload video to S3")
-            raise HTTPException(status_code=500, detail="Failed to upload video to S3")
-        
-        print("✅ S3 upload completed successfully")
-        logger.info("✅ S3 upload completed successfully")
-        return S3UploadResponse(**video_upload_info)
-        
-    except Exception as e:
-        print(f"❌ Error in upload_video_to_s3_endpoint: {str(e)}")
-        logger.error(f"❌ Error in upload_video_to_s3_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error uploading video to S3: {str(e)}")
 
 @app.function(
     image=image,

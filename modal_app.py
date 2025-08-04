@@ -37,13 +37,14 @@ logger = logging.getLogger(__name__)
 # Create Modal app
 app = modal.App("script-trimmer")
 
-# CORS headers for Modal endpoints
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Credentials": "true"
-}
+# CORS configuration
+def add_cors_headers(response):
+    """Add CORS headers to response"""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # Define the image with all dependencies
 image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirements(
@@ -1589,16 +1590,15 @@ def process_youtube_video(youtube_url: str) -> dict:
     volumes={"/data": volume},
     secrets=[secret]
 )
+@modal.fastapi_endpoint(method="OPTIONS")
+async def cors_preflight():
+    """Handle CORS preflight requests"""
+    from fastapi.responses import Response
+    response = Response()
+    return add_cors_headers(response)
+
 @modal.fastapi_endpoint(method="POST")
 async def get_presigned_url_endpoint(request: PresignedUrlRequest):
-    """Generate presigned URL for direct S3 upload"""
-    # Add CORS headers
-    from fastapi.responses import JSONResponse
-    response = JSONResponse(content={})
-    for key, value in CORS_HEADERS.items():
-        response.headers[key] = value
-    
-    print("🚀 get_presigned_url_endpoint called")
     """Generate presigned URL for direct S3 upload"""
     print("🚀 get_presigned_url_endpoint called")
     print(f"📁 Filename: {request.filename}")
@@ -1631,9 +1631,7 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
                 **presigned_info
             )
             response = JSONResponse(content=response_data.dict())
-            for key, value in CORS_HEADERS.items():
-                response.headers[key] = value
-            return response
+            return add_cors_headers(response)
         else:
             print("❌ Failed to generate presigned URL")
             logger.error("❌ Failed to generate presigned URL")
@@ -1687,9 +1685,7 @@ async def extract_audio_endpoint(request: S3UploadRequest):
         from fastapi.responses import JSONResponse
         response_data = AudioExtractionResponse(**result)
         response = JSONResponse(content=response_data.dict())
-        for key, value in CORS_HEADERS.items():
-            response.headers[key] = value
-        return response
+        return add_cors_headers(response)
         
     except Exception as e:
         print(f"❌ Error in extract_audio_endpoint: {str(e)}")

@@ -1608,23 +1608,10 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
         if presigned_info:
             print(f"✅ Presigned URL generated successfully")
             logger.info(f"✅ Presigned URL generated successfully")
-            
-            # Create response with CORS headers
-            from fastapi.responses import JSONResponse
-            response_data = PresignedUrlResponse(
+            return PresignedUrlResponse(
                 message="Presigned URL generated successfully",
                 **presigned_info
             )
-            response = JSONResponse(
-                content=response_data.dict(),
-                headers={
-                    "Access-Control-Allow-Origin": "https://video-processor-frontend-nyyyf64fs-atharvas-projects-edc46cc8.vercel.app",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                    "Access-Control-Max-Age": "86400"
-                }
-            )
-            return response
         else:
             print("❌ Failed to generate presigned URL")
             logger.error("❌ Failed to generate presigned URL")
@@ -1634,28 +1621,6 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
         print(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         logger.error(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating presigned URL: {str(e)}")
-
-@app.function(
-    image=image,
-    cpu=1.0,  # Minimal CPU for presigned URL generation
-    memory=1024,  # Minimal RAM for presigned URL generation
-    timeout=300,  # 5 minutes timeout
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="OPTIONS")
-async def get_presigned_url_options():
-    """Handle OPTIONS requests for CORS preflight"""
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "https://video-processor-frontend-nyyyf64fs-atharvas-projects-edc46cc8.vercel.app",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "86400"
-        }
-    )
 
 @app.function(
     image=image,
@@ -1697,47 +1662,12 @@ async def extract_audio_endpoint(request: S3UploadRequest):
         
         print("✅ Processing completed successfully")
         logger.info("✅ Processing completed successfully")
-        
-        # Create response with CORS headers
-        from fastapi.responses import JSONResponse
-        response_data = AudioExtractionResponse(**result)
-        response = JSONResponse(
-            content=response_data.dict(),
-            headers={
-                "Access-Control-Allow-Origin": "https://video-processor-frontend-nyyyf64fs-atharvas-projects-edc46cc8.vercel.app",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                "Access-Control-Max-Age": "86400"
-            }
-        )
-        return response
+        return AudioExtractionResponse(**result)
         
     except Exception as e:
         print(f"❌ Error in extract_audio_endpoint: {str(e)}")
         logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing video from S3: {str(e)}")
-
-@app.function(
-    image=image,
-    cpu=4.0,  # 4 CPU cores for heavy video processing
-    memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
-    timeout=14400,  # 4 hours timeout for very large file processing
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="OPTIONS")
-async def extract_audio_options():
-    """Handle OPTIONS requests for CORS preflight"""
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "https://video-processor-frontend-nyyyf64fs-atharvas-projects-edc46cc8.vercel.app",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "86400"
-        }
-    )
 
 def generate_presigned_url(filename: str, content_type: str = "video/mp4") -> Optional[dict]:
     """Generate a presigned URL for direct S3 upload"""

@@ -421,11 +421,11 @@
     </div>
 
     <script>
-      // API Configuration - Updated with CORS-fixed endpoints
+      // API Configuration - Updated for boto3 deployment
       const API_BASE_URL =
-        "https://lu-labs--script-trimmer-get-presigned-url-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run";
       const PROCESSING_API_URL =
-        "https://lu-labs--script-trimmer-extract-audio-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run";
 
       // Global variables
       let selectedFile = null;
@@ -616,15 +616,15 @@
           console.log("Getting presigned URL for:", filename, contentType);
           showStatus("🔍 Getting presigned URL...", "info");
 
-          // Use FormData to avoid CORS preflight
-          const formData = new FormData();
-          formData.append("filename", filename);
-          formData.append("content_type", contentType);
-
           const response = await fetch(API_BASE_URL, {
             method: "POST",
-            body: formData,
-            redirect: "follow", // Explicitly follow redirects
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              filename: filename,
+              content_type: contentType,
+            }),
           });
 
           console.log("Response status:", response.status);
@@ -722,19 +722,19 @@
           console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
           console.log("📤 Request payload:", { s3_url: s3Url });
 
-          // Create AbortController for timeout - 30 minutes for large videos
+          // Create AbortController for timeout - 10 minutes for initial request
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 minutes timeout
-
-          // Use FormData to avoid CORS preflight
-          const formData = new FormData();
-          formData.append("s3_url", s3Url);
+          const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
 
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
-            body: formData,
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              s3_url: s3Url,
+            }),
             signal: controller.signal,
-            redirect: "follow", // Explicitly follow redirects
           });
 
           clearTimeout(timeoutId);
@@ -758,7 +758,7 @@
           console.error("❌ Processing error:", error);
           if (error.name === "AbortError") {
             showStatus(
-              "⏰ Request timeout after 30 minutes - Very large videos may take longer. The backend may still be working. Please wait and refresh the page later to check for results.",
+              "⏰ Request timeout - Large videos take 20-30 minutes to process. The backend may still be working. Please wait and refresh the page in 20-30 minutes to check for results.",
               "warning"
             );
             updateProgress(50, "Processing may be running in background...");

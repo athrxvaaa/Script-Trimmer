@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🎬 Script Trimmer - Direct S3 Processing</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        padding: 40px;
+        max-width: 800px;
+        width: 100%;
+        text-align: center;
+      }
+
+      .header {
+        margin-bottom: 30px;
+      }
+
+      .header h1 {
+        color: #667eea;
+        font-size: 2.5rem;
+        margin-bottom: 10px;
+      }
+
+      .header p {
+        color: #666;
+        font-size: 1.1rem;
+      }
+
+      .s3-input-section {
+        background: #f8f9ff;
+        border-radius: 15px;
+        padding: 30px;
+        margin-bottom: 30px;
+        border: 2px dashed #667eea;
+      }
+
+      .s3-input-section h3 {
+        color: #667eea;
+        margin-bottom: 20px;
+        font-size: 1.3rem;
+      }
+
+      .s3-input {
+        width: 100%;
+        padding: 15px;
+        border: 2px solid #e0e0e0;
+        border-radius: 10px;
+        font-size: 1rem;
+        margin-bottom: 15px;
+        transition: border-color 0.3s ease;
+      }
+
+      .s3-input:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .s3-input::placeholder {
+        color: #999;
+      }
+
+      .process-btn {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        border-radius: 10px;
+        font-size: 1.1rem;
+        cursor: pointer;
+        transition: transform 0.2s ease;
+        font-weight: 600;
+      }
+
+      .process-btn:hover {
+        transform: translateY(-2px);
+      }
+
+      .process-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .progress-section {
+        display: none;
+        margin: 30px 0;
+      }
+
+      .progress-bar {
+        width: 100%;
+        height: 20px;
+        background: #f0f0f0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+
+      .progress-text {
+        color: #666;
+        font-size: 0.9rem;
+      }
+
+      .status-container {
+        margin: 20px 0;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .status {
+        padding: 10px 15px;
+        margin: 5px 0;
+        border-radius: 8px;
+        font-size: 0.9rem;
+      }
+
+      .status.success {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+
+      .status.error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+
+      .status.warning {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
+
+      .status.info {
+        background: #d1ecf1;
+        color: #0c5460;
+        border: 1px solid #bee5eb;
+      }
+
+      .results-section {
+        display: none;
+        margin-top: 30px;
+      }
+
+      .results-grid {
+        display: grid;
+        gap: 20px;
+        margin-top: 20px;
+      }
+
+      .result-card {
+        background: #f8f9ff;
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid #e0e0e0;
+      }
+
+      .result-card h3 {
+        color: #667eea;
+        margin-bottom: 15px;
+        font-size: 1.2rem;
+      }
+
+      .result-item {
+        margin: 8px 0;
+        padding: 8px;
+        background: white;
+        border-radius: 6px;
+        border: 1px solid #e0e0e0;
+      }
+
+      .result-item a {
+        color: #667eea;
+        text-decoration: none;
+      }
+
+      .result-item a:hover {
+        text-decoration: underline;
+      }
+
+      .video-preview-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 20px;
+        margin-top: 15px;
+      }
+
+      .video-preview-item {
+        background: #f8f9ff;
+        border-radius: 12px;
+        padding: 15px;
+        border: 1px solid #e0e0e0;
+        transition: transform 0.2s ease;
+      }
+
+      .video-preview-item:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+
+      .video-preview-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .video-preview-header h4 {
+        margin: 0;
+        color: #667eea;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      .video-size {
+        background: #e8f0fe;
+        color: #667eea;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+      }
+
+      .video-preview {
+        width: 100%;
+        border-radius: 8px;
+        background: #000;
+      }
+
+      .loading {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid #f3f3f3;
+        border-top: 3px solid #667eea;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .example-urls {
+        margin-top: 20px;
+        padding: 15px;
+        background: #e8f0fe;
+        border-radius: 8px;
+        text-align: left;
+      }
+
+      .example-urls h4 {
+        color: #667eea;
+        margin-bottom: 10px;
+      }
+
+      .example-url {
+        display: block;
+        color: #667eea;
+        text-decoration: none;
+        margin: 5px 0;
+        font-size: 0.9rem;
+        word-break: break-all;
+      }
+
+      .example-url:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🎬 Script Trimmer</h1>
+        <p>Direct S3 URL Processing - Skip Upload, Start Processing</p>
+      </div>
+
+      <div class="s3-input-section">
+        <h3>📤 Enter S3 URL</h3>
+        <input
+          type="url"
+          id="s3UrlInput"
+          class="s3-input"
+          placeholder="https://your-bucket.s3.amazonaws.com/video.mp4"
+        />
+        <button id="processBtn" class="process-btn">
+          🚀 Process Video
+        </button>
+      </div>
+
+      <div class="example-urls">
+        <h4>💡 Example S3 URLs (for testing):</h4>
+        <a href="#" class="example-url" onclick="setExampleUrl('https://lisa-research.s3.ap-south-1.amazonaws.com/videos/20250804_112800_948f80d5-0cee-4f71-81a0-66bfec7b15d0_Adani%20cements-2.mp4')">
+          https://lisa-research.s3.ap-south-1.amazonaws.com/videos/20250804_112800_948f80d5-0cee-4f71-81a0-66bfec7b15d0_Adani%20cements-2.mp4
+        </a>
+        <a href="#" class="example-url" onclick="setExampleUrl('https://lisa-research.s3.ap-south-1.amazonaws.com/videos/sample-video.mp4')">
+          https://lisa-research.s3.ap-south-1.amazonaws.com/videos/sample-video.mp4
+        </a>
+      </div>
+
+      <!-- Progress Section -->
+      <div id="progressSection" class="progress-section">
+        <div class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <div id="progressText" class="progress-text">Starting...</div>
+      </div>
+
+      <!-- Status Messages -->
+      <div id="statusContainer" class="status-container"></div>
+
+      <!-- Results Section -->
+      <div id="resultsSection" class="results-section">
+        <h3>📊 Processing Results</h3>
+        <div id="resultsGrid" class="results-grid"></div>
+      </div>
+    </div>
+
+    <script>
+      // API Configuration
+      const PROCESSING_API_URL =
+        "https://lu-labs--script-trimmer-extract-audio-endpoint.modal.run";
+
+      // DOM Elements
+      const s3UrlInput = document.getElementById("s3UrlInput");
+      const processBtn = document.getElementById("processBtn");
+      const progressSection = document.getElementById("progressSection");
+      const progressFill = document.getElementById("progressFill");
+      const progressText = document.getElementById("progressText");
+      const statusContainer = document.getElementById("statusContainer");
+      const resultsSection = document.getElementById("resultsSection");
+      const resultsGrid = document.getElementById("resultsGrid");
+
+      // Set example URL
+      function setExampleUrl(url) {
+        s3UrlInput.value = url;
+        return false;
+      }
+
+      // Process video with job polling
+      async function handleProcess() {
+        const s3Url = s3UrlInput.value.trim();
+        
+        if (!s3Url) {
+          showStatus("Please enter a valid S3 URL.", "error");
+          return;
+        }
+
+        if (!s3Url.startsWith('http')) {
+          showStatus("Please enter a valid URL starting with http:// or https://", "error");
+          return;
+        }
+
+        processBtn.disabled = true;
+        processBtn.innerHTML = '<span class="loading"></span>Starting job...';
+        updateProgress(0, "Starting video processing job...");
+
+        try {
+          console.log("🚀 Sending job request to:", PROCESSING_API_URL);
+          console.log("📤 Request payload:", { s3_url: s3Url });
+
+          const response = await fetch(PROCESSING_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              s3_url: s3Url,
+            }),
+          });
+
+          console.log("📥 Job response status:", response.status);
+          const data = await response.json();
+          console.log("📊 Job response data:", data);
+
+          if (response.ok && data.job_id) {
+            showStatus(
+              "✅ Job started successfully! Polling for results...",
+              "success"
+            );
+            await pollJobStatus(data.job_id);
+          } else {
+            console.error("❌ Job creation failed:", data);
+            throw new Error(
+              data.detail || data.message || "Job creation failed"
+            );
+          }
+        } catch (error) {
+          console.error("❌ Job creation error:", error);
+          showStatus(`Job creation failed: ${error.message}`, "error");
+        } finally {
+          processBtn.disabled = false;
+          processBtn.innerHTML = "🚀 Process Video";
+        }
+      }
+
+      // Poll job status
+      async function pollJobStatus(jobId) {
+        const maxAttempts = 180; // 30 minutes with 10-second intervals
+        let attempts = 0;
+
+        const poll = async () => {
+          try {
+            attempts++;
+            console.log(
+              `📊 Polling job ${jobId} (attempt ${attempts}/${maxAttempts})`
+            );
+
+            const statusUrl = `https://lu-labs--script-trimmer-job-status-endpoint.modal.run?job_id=${jobId}`;
+            const response = await fetch(statusUrl);
+            const data = await response.json();
+
+            console.log("📊 Job status:", data);
+
+            if (response.ok) {
+              const { status, message, progress, result, error } = data;
+
+              // Update progress
+              if (progress !== null && progress !== undefined) {
+                updateProgress(progress, message);
+              }
+
+              if (status === "completed") {
+                showStatus(
+                  "✅ Video processing completed successfully!",
+                  "success"
+                );
+                updateProgress(100, "Processing completed!");
+                displayResults(result);
+                return; // Stop polling
+              } else if (status === "failed") {
+                showStatus(
+                  `❌ Processing failed: ${error || message}`,
+                  "error"
+                );
+                return; // Stop polling
+              } else if (status === "running") {
+                showStatus(`🔄 ${message}`, "info");
+                // Continue polling
+              } else if (status === "pending") {
+                showStatus(`⏳ ${message}`, "info");
+                // Continue polling
+              }
+            } else {
+              console.error("❌ Job status request failed:", data);
+              showStatus(
+                `❌ Failed to get job status: ${
+                  data.detail || "Unknown error"
+                }`,
+                "error"
+              );
+              return; // Stop polling
+            }
+
+            // Continue polling if not completed/failed and under max attempts
+            if (attempts < maxAttempts) {
+              setTimeout(poll, 10000); // Poll every 10 seconds
+            } else {
+              showStatus(
+                "⏰ Polling timeout - Processing may still be running. Please refresh the page in a few minutes.",
+                "warning"
+              );
+            }
+          } catch (error) {
+            console.error("❌ Polling error:", error);
+            showStatus(`❌ Polling failed: ${error.message}`, "error");
+          }
+        };
+
+        // Start polling
+        await poll();
+      }
+
+      // Display results
+      function displayResults(data) {
+        console.log("📊 Displaying results:", data);
+        resultsSection.style.display = "block";
+        resultsGrid.innerHTML = "";
+
+        // Video segments with preview
+        if (data.s3_urls && data.s3_urls.length > 0) {
+          const videoSegments = data.s3_urls.filter(
+            (item) => item.segment_type === "topic"
+          );
+          if (videoSegments.length > 0) {
+            const videoCard = createVideoPreviewCard(
+              "Video Segments",
+              videoSegments
+            );
+            resultsGrid.appendChild(videoCard);
+          }
+        }
+
+        // Interaction segments with preview
+        if (data.s3_urls && data.s3_urls.length > 0) {
+          const interactionSegments = data.s3_urls.filter(
+            (item) => item.segment_type === "interaction"
+          );
+          if (interactionSegments.length > 0) {
+            const interactionCard = createVideoPreviewCard(
+              "Interaction Segments",
+              interactionSegments
+            );
+            resultsGrid.appendChild(interactionCard);
+          }
+        }
+      }
+
+      // Create video preview card
+      function createVideoPreviewCard(title, segments) {
+        const card = document.createElement("div");
+        card.className = "result-card";
+
+        let videosHtml = "";
+        segments.forEach((item, index) => {
+          if (item.s3_url) {
+            videosHtml += `
+              <div class="video-preview-item">
+                <div class="video-preview-header">
+                  <h4>🎬 ${item.filename}</h4>
+                  <span class="video-size">${item.size_mb ? item.size_mb.toFixed(1) + ' MB' : 'N/A'}</span>
+                </div>
+                <video controls preload="metadata" class="video-preview">
+                  <source src="${item.s3_url}" type="video/mp4">
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            `;
+          }
+        });
+
+        card.innerHTML = `
+          <h3>${title}</h3>
+          <div class="video-preview-grid">
+            ${videosHtml}
+          </div>
+        `;
+        return card;
+      }
+
+      // Update progress
+      function updateProgress(percent, text) {
+        progressSection.style.display = "block";
+        progressFill.style.width = percent + "%";
+        progressText.textContent = text;
+      }
+
+      // Show status message
+      function showStatus(message, type = "info") {
+        const statusDiv = document.createElement("div");
+        statusDiv.className = `status ${type}`;
+        statusDiv.innerHTML = message;
+
+        statusContainer.appendChild(statusDiv);
+
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+          if (statusDiv.parentNode) {
+            statusDiv.parentNode.removeChild(statusDiv);
+          }
+        }, 5000);
+      }
+
+      // Event listeners
+      processBtn.addEventListener("click", handleProcess);
+      s3UrlInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          handleProcess();
+        }
+      });
+    </script>
+  </body>
+</html> 

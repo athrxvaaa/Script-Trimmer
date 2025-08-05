@@ -4,9 +4,12 @@ from tqdm import tqdm
 import json
 import time
 import sys
+from pathlib import Path
 
 # Set your OpenAI API key here or use an environment variable
-openai.api_key = os.getenv("OPENAI_API_KEY", "sk-...")  # <-- Replace with your key or set env var
+openai.api_key = os.getenv("OPENAI_API_KEY")
+if not openai.api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is required but not set")
 
 OUTPUT_DIR = "output"
 SEGMENTS_JSON = "segments.json"
@@ -16,7 +19,11 @@ GPT_MODEL = "gpt-4o-mini"
 # Retry settings
 MAX_RETRIES = 5
 RETRY_DELAY = 5
-TIMEOUT = 300  # 5 minutes for transcription
+TIMEOUT = 600  # 10 minutes for transcription (increased from 5)
+GPT_TIMEOUT = 120  # 2 minutes for GPT API calls
+
+# File size limits
+MAX_AUDIO_FILE_SIZE_MB = 100  # Maximum audio file size for transcription
 
 REFERENCE_PROMPT = '''
 You are analyzing a transcript of a lecture to extract meaningful **main topics** and **subtopics**.
@@ -51,6 +58,36 @@ Output format:
 ]
 '''
 
+def validate_audio_file(file_path: Path) -> tuple[bool, str]:
+    """Validate audio file before transcription"""
+    try:
+        # Check if file exists
+        if not file_path.exists():
+            return False, f"File does not exist: {file_path}"
+        
+        # Check if file is readable
+        if not os.access(file_path, os.R_OK):
+            return False, f"File is not readable: {file_path}"
+        
+        # Check file size
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > MAX_AUDIO_FILE_SIZE_MB:
+            return False, f"File size {file_size_mb:.2f}MB exceeds maximum {MAX_AUDIO_FILE_SIZE_MB}MB"
+        
+        # Check if file is not empty
+        if file_path.stat().st_size == 0:
+            return False, f"File is empty: {file_path}"
+        
+        # Check file extension
+        valid_extensions = ('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus')
+        if not file_path.suffix.lower() in valid_extensions:
+            return False, f"Invalid file extension: {file_path.suffix}"
+        
+        return True, "File is valid"
+        
+    except Exception as e:
+        return False, f"Error validating file: {str(e)}"
+
 def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
     # If transcriptions.json exists, load and return it
     if os.path.exists(TRANSCRIPTIONS_JSON):
@@ -65,8 +102,23 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
     print(f"Found {len(audio_files)} audio files to transcribe.")
     
     for filename in tqdm(audio_files, desc="Transcribing files", unit="file"):
-        file_path = os.path.join(output_dir, filename)
+        file_path = Path(output_dir) / filename
         print(f"\n---\nStarting transcription: {file_path}")
+        
+        # Validate audio file before transcription
+        is_valid, validation_message = validate_audio_file(file_path)
+        if not is_valid:
+            print(f"❌ File validation failed: {validation_message}")
+            results.append({
+                "filename": filename,
+                "file_path": str(file_path),
+                "total_segments": 0,
+                "segments": [],
+                "error": f"File validation failed: {validation_message}"
+            })
+            continue
+        
+        print(f"✅ File validation passed: {validation_message}")
         
         # Retry logic for transcription
         for attempt in range(MAX_RETRIES):
@@ -76,7 +128,8 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                         model="whisper-1",
                         file=audio_file,
                         response_format="verbose_json",
-                        language=language
+                        language=language,
+                        timeout=TIMEOUT
                     )
                 
                 print(f"Finished transcription: {file_path}")
@@ -85,7 +138,7 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                 # Create a single object for this audio file with all segments
                 file_transcription = {
                     "filename": filename,
-                    "file_path": file_path,
+                    "file_path": str(file_path),
                     "total_segments": len(transcript.segments),
                     "segments": []
                 }
@@ -113,7 +166,7 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                     # Add a placeholder entry to maintain file order
                     results.append({
                         "filename": filename,
-                        "file_path": file_path,
+                        "file_path": str(file_path),
                         "total_segments": 0,
                         "segments": [],
                         "error": str(e)
@@ -191,7 +244,8 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=256,
-                temperature=0.2
+                temperature=0.2,
+                timeout=GPT_TIMEOUT
             )
             content = response.choices[0].message.content.strip()
             
@@ -205,7 +259,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
             
             content = content.strip()
             
-            # Try to parse the JSON output
+            # Try to parse the JSON output with improved error handling
             try:
                 topics = json.loads(content)
                 if isinstance(topics, list):
@@ -229,6 +283,18 @@ Return ONLY the JSON array, no markdown formatting or explanations.
             except json.JSONDecodeError as e:
                 print(f"JSON parsing failed: {e}")
                 print(f"Raw content: {content}")
+                # Try to extract JSON from the response if it's wrapped in text
+                try:
+                    # Look for JSON array pattern
+                    import re
+                    json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if json_match:
+                        extracted_json = json_match.group(0)
+                        topics = json.loads(extracted_json)
+                        if isinstance(topics, list):
+                            return topics
+                except:
+                    pass
                 return [{"title": "Unknown", "start": "00:00", "end": f"{max_minutes}:{max_seconds:02d}"}]
                 
         except Exception as e:
@@ -290,7 +356,8 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 model=GPT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=256,
-                temperature=0.2
+                temperature=0.2,
+                timeout=GPT_TIMEOUT
             )
             content = response.choices[0].message.content.strip()
             

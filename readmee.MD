@@ -1,0 +1,11 @@
+Script Trimmer readme 
+
+A script which takes the video as an input and uploads it to s3 , generating a presigned url and after the presigned url is returned it will store the video in the s3 bucket lisa research which will then retur n the s3 url 
+
+after the s3 url is returned , the modal script will download the video from the s3 
+
+first it will seperate the audio form the video using ffmpeg , after the audio is speerated succesfully , the function will check if the audio is under 25 mb  ( whisper doesnt take audio segments above 25 mb ) , we need to send the audio to whisper (openai) to get the transcriptions out of hte audio , we will divide the audio into chunks based on the size of the video , the higher the size the more the number of the chunks , after the chunking is done based on the  size we will transcribe the segments one by one , the audio is compressed and then sent to whisper to be transcibed , the transriptions are saved in the transcriptions.json in the modal volumne , as the transcriptions are done , 
+
+We will now start with the semgnet analysis of the video , now after we get transcription , and the transcriptions are being saved in the transcription.json we will fetch each transcription and give it the context of the previous and the next transcription , and then feed it to openai gpt which will anaylse the video and create a new file called the segments.json which wil store all the segments that are being generated from the analysis of the video transcriptions ,and afte ther the segments are being created , the script will use ffmpeg , to cut out the segmetns based on the segments file , after segments are created, we will upload the individual clips to aws s3 to be returned as url , 
+
+in the meanwhiel , as the https://video-processor-frontend-1dmshdkxm-atharvas-projects-edc46cc8.vercel.app is called , we will first esatblist a connnection between the server and the client using modal stream after the conection is establihed , modal backend will send continous update to the frounend updating about the progress , 

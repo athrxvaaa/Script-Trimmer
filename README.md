@@ -9,11 +9,13 @@ A modern, AI-powered video processing platform that automatically segments video
 ## 📡 Deployed API Endpoints
 
 ### 1. Get Presigned URL Endpoint
+
 **URL**: `https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run`  
 **Method**: `POST`  
 **Purpose**: Generate presigned URLs for direct S3 uploads
 
 **Request Body**:
+
 ```json
 {
   "filename": "video.mp4"
@@ -21,6 +23,7 @@ A modern, AI-powered video processing platform that automatically segments video
 ```
 
 **Response**:
+
 ```json
 {
   "message": "Presigned URL generated successfully",
@@ -32,11 +35,13 @@ A modern, AI-powered video processing platform that automatically segments video
 ```
 
 ### 2. Extract Audio Endpoint
+
 **URL**: `https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run`  
 **Method**: `POST`  
 **Purpose**: Process uploaded videos for audio extraction and segmentation
 
 **Request Body**:
+
 ```json
 {
   "s3_url": "https://bucket.s3.region.amazonaws.com/video.mp4"
@@ -44,6 +49,7 @@ A modern, AI-powered video processing platform that automatically segments video
 ```
 
 **Response**:
+
 ```json
 {
   "s3_url": "https://bucket.s3.region.amazonaws.com/video.mp4",
@@ -55,16 +61,19 @@ A modern, AI-powered video processing platform that automatically segments video
 ```
 
 ### 3. Progress Stream Endpoint
+
 **URL**: `https://lu-labs--script-trimmer-boto3-progress-stream-endpoint.modal.run`  
 **Method**: `GET`  
 **Purpose**: Real-time progress updates via Server-Sent Events (SSE)
 
 **Query Parameters**:
+
 - `s3_url`: URL-encoded S3 URL of the video being processed
 
 **Response**: Server-Sent Events stream with real-time updates
 
 **Example Events**:
+
 ```json
 {"type": "connection", "message": "Connected to progress stream", "s3_url": "..."}
 {"s3_url": "...", "status": "running", "message": "Downloading video from S3...", "progress": 15.0, "timestamp": "..."}
@@ -75,6 +84,7 @@ A modern, AI-powered video processing platform that automatically segments video
 ## ✨ Features
 
 ### 🎥 **Enhanced Video Display**
+
 - **Embedded Video Players** - Videos play directly in the browser
 - **Compact Preview Windows** - Small, clean video players with hover effects
 - **Responsive Grid Layout** - Automatically adapts to screen size
@@ -82,6 +92,7 @@ A modern, AI-powered video processing platform that automatically segments video
 - **Modern UI** - Professional design with rounded corners and smooth animations
 
 ### 🔧 **Backend Improvements**
+
 - **Boto3 Integration** - Native AWS S3 client for reliable uploads
 - **Enhanced Error Handling** - Better error messages and debugging
 - **Improved Logging** - Detailed logs for troubleshooting
@@ -89,6 +100,7 @@ A modern, AI-powered video processing platform that automatically segments video
 - **Real-time Progress** - Modal Queue for live progress updates
 
 ### 🎯 **Simplified UI**
+
 - **Video Segments Only** - Shows only video segments with embedded players
 - **Interaction Segments** - Separate display for interaction segments
 - **No Clutter** - Clean design focused on video content
@@ -97,12 +109,14 @@ A modern, AI-powered video processing platform that automatically segments video
 ## 🏗️ Architecture
 
 ### Frontend (Vercel)
+
 - **Framework**: Pure HTML/CSS/JavaScript
 - **Deployment**: Vercel (Static Site)
 - **Features**: Drag & drop upload, progress tracking, video preview
 - **URL**: https://video-processor-frontend-1dmshdkxm-atharvas-projects-edc46cc8.vercel.app
 
 ### Backend (Modal)
+
 - **Framework**: FastAPI on Modal
 - **Processing**: AI-powered video segmentation
 - **Storage**: AWS S3 with presigned URLs
@@ -178,6 +192,7 @@ Apply the CORS configuration in `cors-config.json` to your S3 bucket:
 ## 🎯 Usage Guide
 
 ### Step 1: Upload Video
+
 1. **Select File**: Click the upload area or drag & drop a video file
 2. **File Validation**: The app validates file type and size (max 10GB)
 3. **Upload to S3**: Click "Upload to S3" to start the upload process
@@ -185,6 +200,7 @@ Apply the CORS configuration in `cors-config.json` to your S3 bucket:
 5. **Confirmation**: See upload status and video information
 
 ### Step 2: Process Video
+
 1. **Process Button**: After successful upload, click "Process Video"
 2. **Processing**: The app calls your Modal backend for video analysis
 3. **Real-time Progress**: Watch live progress updates via SSE
@@ -210,6 +226,7 @@ Apply the CORS configuration in `cors-config.json` to your S3 bucket:
 ## 🔧 Configuration
 
 ### Modal App Configuration
+
 - **CPU**: 4.0 cores for heavy video processing
 - **Memory**: 16GB RAM for large file handling
 - **Timeout**: 4 hours for very large file processing
@@ -217,6 +234,7 @@ Apply the CORS configuration in `cors-config.json` to your S3 bucket:
 - **Queue**: Modal Queue for real-time progress updates
 
 ### S3 Configuration
+
 - **Bucket**: Configured via environment variables
 - **Region**: ap-south-1 (configurable)
 - **Multipart Upload**: 50MB chunks for large files

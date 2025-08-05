@@ -96,6 +96,91 @@
         display: none;
       }
 
+      /* S3 URL Input Styles */
+      .s3-url-section {
+        margin-bottom: 30px;
+        text-align: center;
+      }
+
+      .s3-url-section h4 {
+        color: #667eea;
+        margin-bottom: 15px;
+        font-size: 1.2rem;
+      }
+
+      .s3-url-input {
+        display: flex;
+        gap: 10px;
+        max-width: 600px;
+        margin: 0 auto;
+        align-items: center;
+      }
+
+      .s3-url-field {
+        flex: 1;
+        padding: 12px 15px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        font-size: 1rem;
+        transition: border-color 0.3s ease;
+      }
+
+      .s3-url-field:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .process-s3-btn {
+        padding: 12px 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+        white-space: nowrap;
+      }
+
+      .process-s3-btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+      }
+
+      .process-s3-btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      .upload-divider {
+        text-align: center;
+        margin: 30px 0;
+        position: relative;
+      }
+
+      .upload-divider::before {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: #e0e0e0;
+        z-index: 1;
+      }
+
+      .upload-divider span {
+        background: white;
+        padding: 0 20px;
+        color: #666;
+        font-size: 0.9rem;
+        position: relative;
+        z-index: 2;
+      }
+
       .progress-section {
         margin: 30px 0;
         display: none;
@@ -354,6 +439,26 @@
       <div class="main-content">
         <!-- Upload Section -->
         <div class="upload-section">
+          <!-- S3 URL Input -->
+          <div class="s3-url-section">
+            <h4>🔗 Or Enter S3 URL Directly</h4>
+            <div class="s3-url-input">
+              <input
+                type="text"
+                id="s3UrlInput"
+                placeholder="Enter S3 URL (e.g., https://bucket.s3.region.amazonaws.com/video.mp4)"
+                class="s3-url-field"
+              />
+              <button id="processS3Btn" class="process-s3-btn" disabled>
+                ⚙️ Process S3 Video
+              </button>
+            </div>
+          </div>
+
+          <div class="upload-divider">
+            <span>OR</span>
+          </div>
+
           <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📁</div>
             <div class="upload-text">
@@ -421,11 +526,11 @@
     </div>
 
     <script>
-      // API Configuration - Updated for boto3 deployment
+      // API Configuration - Updated for polling deployment
       const API_BASE_URL =
-        "https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-get-presigned-url-endpoint.modal.run";
       const PROCESSING_API_URL =
-        "https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-extract-audio-endpoint.modal.run";
 
       // Global variables
       let selectedFile = null;
@@ -440,6 +545,8 @@
       const statusContainer = document.getElementById("statusContainer");
       const uploadBtn = document.getElementById("uploadBtn");
       const processBtn = document.getElementById("processBtn");
+      const processS3Btn = document.getElementById("processS3Btn");
+      const s3UrlInput = document.getElementById("s3UrlInput");
       const resultsSection = document.getElementById("resultsSection");
 
       // Event listeners
@@ -450,6 +557,10 @@
       fileInput.addEventListener("change", handleFileSelect);
       uploadBtn.addEventListener("click", handleUpload);
       processBtn.addEventListener("click", handleProcess);
+
+      // S3 URL input event listeners
+      s3UrlInput.addEventListener("input", handleS3UrlInput);
+      processS3Btn.addEventListener("click", handleProcessS3Url);
 
       // Drag and drop handlers
       function handleDragOver(e) {
@@ -700,7 +811,66 @@
         });
       }
 
-      // Process video with job polling
+      // Handle S3 URL input
+      function handleS3UrlInput() {
+        const url = s3UrlInput.value.trim();
+        const isValidUrl =
+          url.startsWith("http") &&
+          url.includes("s3") &&
+          url.includes("amazonaws.com");
+        processS3Btn.disabled = !isValidUrl;
+      }
+
+      // Process S3 URL directly
+      async function handleProcessS3Url() {
+        const url = s3UrlInput.value.trim();
+        if (!url) {
+          showStatus("Please enter a valid S3 URL", "error");
+          return;
+        }
+
+        processS3Btn.disabled = true;
+        processS3Btn.innerHTML = '<span class="loading"></span>Processing...';
+        updateProgress(0, "Processing video from S3 URL...");
+
+        try {
+          console.log("🚀 Processing S3 URL:", url);
+
+          const response = await fetch(PROCESSING_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              s3_url: url,
+            }),
+          });
+
+          console.log("📥 Processing response status:", response.status);
+          const data = await response.json();
+          console.log("📊 Processing response data:", data);
+
+          if (response.ok && data.video_segments) {
+            showStatus(
+              "✅ Video processing completed successfully!",
+              "success"
+            );
+            updateProgress(100, "Processing completed!");
+            displayResults(data);
+          } else {
+            console.error("❌ Processing failed:", data);
+            throw new Error(data.detail || data.message || "Processing failed");
+          }
+        } catch (error) {
+          console.error("❌ Processing error:", error);
+          showStatus(`Processing failed: ${error.message}`, "error");
+        } finally {
+          processS3Btn.disabled = false;
+          processS3Btn.innerHTML = "⚙️ Process S3 Video";
+        }
+      }
+
+      // Process video directly
       async function handleProcess() {
         if (!s3Url) {
           showStatus(
@@ -711,12 +881,11 @@
         }
 
         processBtn.disabled = true;
-        processBtn.innerHTML = '<span class="loading"></span>Starting job...';
-        updateProgress(0, "Starting video processing job...");
+        processBtn.innerHTML = '<span class="loading"></span>Processing...';
+        updateProgress(0, "Processing video...");
 
         try {
-          console.log("🚀 Sending job request to:", PROCESSING_API_URL);
-          console.log("📤 Request payload:", { s3_url: s3Url });
+          console.log("🚀 Processing S3 URL:", s3Url);
 
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
@@ -728,106 +897,25 @@
             }),
           });
 
-          console.log("📥 Job response status:", response.status);
+          console.log("📥 Processing response status:", response.status);
           const data = await response.json();
-          console.log("📊 Job response data:", data);
+          console.log("📊 Processing response data:", data);
 
-          if (response.ok && data.job_id) {
-            showStatus(
-              "✅ Job started successfully! Polling for results...",
-              "success"
-            );
-            await pollJobStatus(data.job_id);
+          if (response.ok && data.video_segments) {
+            showStatus("✅ Video processing completed successfully!", "success");
+            updateProgress(100, "Processing completed!");
+            displayResults(data);
           } else {
-            console.error("❌ Job creation failed:", data);
-            throw new Error(
-              data.detail || data.message || "Job creation failed"
-            );
+            console.error("❌ Processing failed:", data);
+            throw new Error(data.detail || data.message || "Processing failed");
           }
         } catch (error) {
-          console.error("❌ Job creation error:", error);
-          showStatus(`Job creation failed: ${error.message}`, "error");
+          console.error("❌ Processing error:", error);
+          showStatus(`Processing failed: ${error.message}`, "error");
         } finally {
           processBtn.disabled = false;
           processBtn.innerHTML = "⚙️ Process Video";
         }
-      }
-
-      // Poll job status
-      async function pollJobStatus(jobId) {
-        const maxAttempts = 180; // 30 minutes with 10-second intervals
-        let attempts = 0;
-
-        const poll = async () => {
-          try {
-            attempts++;
-            console.log(
-              `📊 Polling job ${jobId} (attempt ${attempts}/${maxAttempts})`
-            );
-
-            const statusUrl = `https://lu-labs--script-trimmer-job-status-endpoint.modal.run?job_id=${jobId}`;
-            const response = await fetch(statusUrl);
-            const data = await response.json();
-
-            console.log("📊 Job status:", data);
-
-            if (response.ok) {
-              const { status, message, progress, result, error } = data;
-
-              // Update progress
-              if (progress !== null && progress !== undefined) {
-                updateProgress(progress, message);
-              }
-
-              if (status === "completed") {
-                showStatus(
-                  "✅ Video processing completed successfully!",
-                  "success"
-                );
-                updateProgress(100, "Processing completed!");
-                displayResults(result);
-                return; // Stop polling
-              } else if (status === "failed") {
-                showStatus(
-                  `❌ Processing failed: ${error || message}`,
-                  "error"
-                );
-                return; // Stop polling
-              } else if (status === "running") {
-                showStatus(`🔄 ${message}`, "info");
-                // Continue polling
-              } else if (status === "pending") {
-                showStatus(`⏳ ${message}`, "info");
-                // Continue polling
-              }
-            } else {
-              console.error("❌ Job status request failed:", data);
-              showStatus(
-                `❌ Failed to get job status: ${
-                  data.detail || "Unknown error"
-                }`,
-                "error"
-              );
-              return; // Stop polling
-            }
-
-            // Continue polling if not completed/failed and under max attempts
-            if (attempts < maxAttempts) {
-              setTimeout(poll, 10000); // Poll every 10 seconds
-            } else {
-              showStatus(
-                "⏰ Polling timeout - Processing may still be running. Please refresh the page in a few minutes.",
-                "warning"
-              );
-            }
-          } catch (error) {
-            console.error("❌ Polling error:", error);
-            showStatus(`❌ Polling failed: ${error.message}`, "error");
-          }
-        };
-
-        // Start polling
-        await poll();
       }
 
       // Display results

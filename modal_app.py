@@ -49,8 +49,9 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirem
 # Create a volume for persistent storage
 volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True)
 
-# Job storage for tracking long-running processes
-JOBS_FILE = "/data/jobs.json"
+
+
+
 
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
@@ -105,15 +106,7 @@ class PresignedUrlResponse(BaseModel):
 class S3UploadRequest(BaseModel):
     s3_url: str
 
-class JobStatus(BaseModel):
-    job_id: str
-    status: str  # "pending", "running", "completed", "failed"
-    message: str
-    progress: Optional[float] = None
-    result: Optional[dict] = None
-    error: Optional[str] = None
-    created_at: str
-    updated_at: str
+
 
 
 
@@ -1635,177 +1628,52 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
         logger.error(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating presigned URL: {str(e)}")
 
-@app.function(
-    image=image,
-    cpu=4.0,  # 4 CPU cores for heavy video processing
-    memory=16384,  # 16GB RAM for large file handling (2GB+ files need 3-4x memory)
-    timeout=14400,  # 4 hours timeout for very large file processing
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-def process_video_background(job_id: str, s3_url: str):
-    """Background function to process video"""
-    try:
-        logger.info(f"🚀 Starting background processing for job {job_id}")
-        update_job(job_id, "running", "Starting video processing...", 10.0)
-        
-        # Create directories
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        
-        update_job(job_id, "running", "Processing video from S3...", 30.0)
-        
-        # Process video from S3
-        result = process_video_from_s3(s3_url)
-        
-        # Update job with success
-        update_job(job_id, "completed", "Video processing completed successfully!", 100.0, result)
-        logger.info(f"✅ Background processing completed for job {job_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Background processing failed for job {job_id}: {str(e)}")
-        update_job(job_id, "failed", f"Processing failed: {str(e)}", error=str(e))
+
 
 @app.function(
     image=image,
-    cpu=1.0,  # Minimal CPU for job management
-    memory=1024,  # Minimal RAM for job management
-    timeout=300,  # 5 minutes timeout
+    cpu=4.0,  # 4 CPU cores for heavy video processing
+    memory=16384,  # 16GB RAM for large file handling
+    timeout=14400,  # 4 hours timeout for very large file processing
     volumes={"/data": volume},
     secrets=[secret]
 )
 @modal.fastapi_endpoint(method="POST")
 async def extract_audio_endpoint(request: S3UploadRequest):
-    """Start video processing job and return job ID"""
+    """Process video from S3 URL directly"""
     try:
         logger.info("=" * 60)
         logger.info("🎬 EXTRACT AUDIO ENDPOINT CALLED")
         logger.info("=" * 60)
         logger.info(f"📤 S3 URL: {request.s3_url}")
         
-        # Create job
-        job_id = create_job()
-        logger.info(f"📋 Created job: {job_id}")
+        # Create directories
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
         
-        # Start background processing
-        process_video_background.remote(job_id, request.s3_url)
+        logger.info("📂 Directories created successfully")
         
+        # Process the video from S3 URL directly
+        logger.info("🔄 Starting video processing from S3...")
+        result = process_video_from_s3(request.s3_url)
+        
+        logger.info("✅ Processing completed successfully")
         logger.info("=" * 60)
-        logger.info("✅ JOB STARTED SUCCESSFULLY")
+        logger.info("✅ EXTRACT AUDIO ENDPOINT COMPLETED")
         logger.info("=" * 60)
         
-        return {
-            "job_id": job_id,
-            "status": "pending",
-            "message": "Video processing job started successfully",
-            "poll_url": f"/job-status/{job_id}"
-        }
+        return AudioExtractionResponse(**result)
         
     except Exception as e:
         logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error starting video processing job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing video from S3: {str(e)}")
 
-@app.function(
-    image=image,
-    cpu=1.0,  # Minimal CPU for job status
-    memory=1024,  # Minimal RAM for job status
-    timeout=300,  # 5 minutes timeout
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="GET")
-async def job_status_endpoint(job_id: str):
-    """Get job status by ID"""
-    try:
-        logger.info(f"📊 Checking status for job: {job_id}")
-        
-        job_data = get_job_status(job_id)
-        if not job_data:
-            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-        
-        return JobStatus(
-            job_id=job_id,
-            status=job_data["status"],
-            message=job_data["message"],
-            progress=job_data.get("progress"),
-            result=job_data.get("result"),
-            error=job_data.get("error"),
-            created_at=job_data["created_at"],
-            updated_at=job_data["updated_at"]
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error getting job status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting job status: {str(e)}")
 
-# Job management functions
-def load_jobs() -> dict:
-    """Load jobs from persistent storage"""
-    try:
-        if Path(JOBS_FILE).exists():
-            with open(JOBS_FILE, 'r') as f:
-                import json
-                return json.load(f)
-        return {}
-    except Exception as e:
-        logger.error(f"Error loading jobs: {e}")
-        return {}
 
-def save_jobs(jobs: dict):
-    """Save jobs to persistent storage"""
-    try:
-        with open(JOBS_FILE, 'w') as f:
-            import json
-            json.dump(jobs, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving jobs: {e}")
 
-def create_job() -> str:
-    """Create a new job and return job ID"""
-    jobs = load_jobs()
-    job_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    
-    jobs[job_id] = {
-        "status": "pending",
-        "message": "Job created",
-        "progress": 0.0,
-        "result": None,
-        "error": None,
-        "created_at": now,
-        "updated_at": now
-    }
-    
-    save_jobs(jobs)
-    logger.info(f"Created job: {job_id}")
-    return job_id
 
-def update_job(job_id: str, status: str, message: str, progress: float = None, result: dict = None, error: str = None):
-    """Update job status"""
-    jobs = load_jobs()
-    if job_id in jobs:
-        jobs[job_id].update({
-            "status": status,
-            "message": message,
-            "updated_at": datetime.now().isoformat()
-        })
-        if progress is not None:
-            jobs[job_id]["progress"] = progress
-        if result is not None:
-            jobs[job_id]["result"] = result
-        if error is not None:
-            jobs[job_id]["error"] = error
-        
-        save_jobs(jobs)
-        logger.info(f"Updated job {job_id}: {status} - {message}")
 
-def get_job_status(job_id: str) -> Optional[dict]:
-    """Get job status by ID"""
-    jobs = load_jobs()
-    return jobs.get(job_id)
 
 def generate_presigned_url(filename: str, content_type: str = "video/mp4") -> Optional[dict]:
     """Generate a presigned URL for direct S3 upload"""

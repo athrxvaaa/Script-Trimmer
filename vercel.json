@@ -4,21 +4,9 @@
     {
       "src": "index.html",
       "use": "@vercel/static"
-    },
-    {
-      "src": "intermediate_processor.html",
-      "use": "@vercel/static"
     }
   ],
   "rewrites": [
-    {
-      "source": "/",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/direct",
-      "destination": "/intermediate_processor.html"
-    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

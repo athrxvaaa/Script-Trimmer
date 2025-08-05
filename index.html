@@ -700,7 +700,7 @@
         });
       }
 
-      // Process video
+      // Process video with job polling
       async function handleProcess() {
         if (!s3Url) {
           showStatus(
@@ -711,20 +711,12 @@
         }
 
         processBtn.disabled = true;
-        processBtn.innerHTML =
-          '<span class="loading"></span>Processing video...';
-        updateProgress(
-          0,
-          "Starting video processing (this may take 20-30 minutes for large videos)..."
-        );
+        processBtn.innerHTML = '<span class="loading"></span>Starting job...';
+        updateProgress(0, "Starting video processing job...");
 
         try {
-          console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
+          console.log("🚀 Sending job request to:", PROCESSING_API_URL);
           console.log("📤 Request payload:", { s3_url: s3Url });
-
-          // Create AbortController for timeout - 10 minutes for initial request
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
 
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
@@ -734,41 +726,108 @@
             body: JSON.stringify({
               s3_url: s3Url,
             }),
-            signal: controller.signal,
           });
 
-          clearTimeout(timeoutId);
-
-          console.log("📥 Processing response status:", response.status);
-          console.log("📥 Processing response headers:", response.headers);
-
+          console.log("📥 Job response status:", response.status);
           const data = await response.json();
-          console.log("📊 Processing response data:", data);
+          console.log("📊 Job response data:", data);
 
-          if (response.ok) {
-            updateProgress(100, "Processing completed!");
-            showStatus("Video processing completed successfully!", "success");
-            displayResults(data);
+          if (response.ok && data.job_id) {
+            showStatus(
+              "✅ Job started successfully! Polling for results...",
+              "success"
+            );
+            await pollJobStatus(data.job_id);
           } else {
-            console.error("❌ Processing failed with status:", response.status);
-            console.error("❌ Error details:", data);
-            throw new Error(data.detail || data.message || "Processing failed");
+            console.error("❌ Job creation failed:", data);
+            throw new Error(
+              data.detail || data.message || "Job creation failed"
+            );
           }
         } catch (error) {
-          console.error("❌ Processing error:", error);
-          if (error.name === "AbortError") {
-            showStatus(
-              "⏰ Request timeout - Large videos take 20-30 minutes to process. The backend may still be working. Please wait and refresh the page in 20-30 minutes to check for results.",
-              "warning"
-            );
-            updateProgress(50, "Processing may be running in background...");
-          } else {
-            showStatus(`Processing failed: ${error.message}`, "error");
-          }
+          console.error("❌ Job creation error:", error);
+          showStatus(`Job creation failed: ${error.message}`, "error");
         } finally {
           processBtn.disabled = false;
           processBtn.innerHTML = "⚙️ Process Video";
         }
+      }
+
+      // Poll job status
+      async function pollJobStatus(jobId) {
+        const maxAttempts = 180; // 30 minutes with 10-second intervals
+        let attempts = 0;
+
+        const poll = async () => {
+          try {
+            attempts++;
+            console.log(
+              `📊 Polling job ${jobId} (attempt ${attempts}/${maxAttempts})`
+            );
+
+            const statusUrl = `https://lu-labs--script-trimmer-job-status-endpoint.modal.run?job_id=${jobId}`;
+            const response = await fetch(statusUrl);
+            const data = await response.json();
+
+            console.log("📊 Job status:", data);
+
+            if (response.ok) {
+              const { status, message, progress, result, error } = data;
+
+              // Update progress
+              if (progress !== null && progress !== undefined) {
+                updateProgress(progress, message);
+              }
+
+              if (status === "completed") {
+                showStatus(
+                  "✅ Video processing completed successfully!",
+                  "success"
+                );
+                updateProgress(100, "Processing completed!");
+                displayResults(result);
+                return; // Stop polling
+              } else if (status === "failed") {
+                showStatus(
+                  `❌ Processing failed: ${error || message}`,
+                  "error"
+                );
+                return; // Stop polling
+              } else if (status === "running") {
+                showStatus(`🔄 ${message}`, "info");
+                // Continue polling
+              } else if (status === "pending") {
+                showStatus(`⏳ ${message}`, "info");
+                // Continue polling
+              }
+            } else {
+              console.error("❌ Job status request failed:", data);
+              showStatus(
+                `❌ Failed to get job status: ${
+                  data.detail || "Unknown error"
+                }`,
+                "error"
+              );
+              return; // Stop polling
+            }
+
+            // Continue polling if not completed/failed and under max attempts
+            if (attempts < maxAttempts) {
+              setTimeout(poll, 10000); // Poll every 10 seconds
+            } else {
+              showStatus(
+                "⏰ Polling timeout - Processing may still be running. Please refresh the page in a few minutes.",
+                "warning"
+              );
+            }
+          } catch (error) {
+            console.error("❌ Polling error:", error);
+            showStatus(`❌ Polling failed: ${error.message}`, "error");
+          }
+        };
+
+        // Start polling
+        await poll();
       }
 
       // Display results

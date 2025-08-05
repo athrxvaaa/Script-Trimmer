@@ -4,12 +4,9 @@ from tqdm import tqdm
 import json
 import time
 import sys
-from pathlib import Path
 
 # Set your OpenAI API key here or use an environment variable
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is required but not set")
+openai.api_key = os.getenv("OPENAI_API_KEY", "sk-...")  # <-- Replace with your key or set env var
 
 OUTPUT_DIR = "output"
 SEGMENTS_JSON = "segments.json"
@@ -19,11 +16,8 @@ GPT_MODEL = "gpt-4o-mini"
 # Retry settings
 MAX_RETRIES = 5
 RETRY_DELAY = 5
-TIMEOUT = 600  # 10 minutes for transcription (increased from 5)
-GPT_TIMEOUT = 120  # 2 minutes for GPT API calls
-
-# File size limits
-MAX_AUDIO_FILE_SIZE_MB = 100  # Maximum audio file size for transcription
+TIMEOUT = 300  # 5 minutes for transcription
+CHUNK_TIMEOUT = 120  # 2 minutes timeout for individual chunk transcription
 
 REFERENCE_PROMPT = '''
 You are analyzing a transcript of a lecture to extract meaningful **main topics** and **subtopics**.
@@ -58,36 +52,6 @@ Output format:
 ]
 '''
 
-def validate_audio_file(file_path: Path) -> tuple[bool, str]:
-    """Validate audio file before transcription"""
-    try:
-        # Check if file exists
-        if not file_path.exists():
-            return False, f"File does not exist: {file_path}"
-        
-        # Check if file is readable
-        if not os.access(file_path, os.R_OK):
-            return False, f"File is not readable: {file_path}"
-        
-        # Check file size
-        file_size_mb = file_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > MAX_AUDIO_FILE_SIZE_MB:
-            return False, f"File size {file_size_mb:.2f}MB exceeds maximum {MAX_AUDIO_FILE_SIZE_MB}MB"
-        
-        # Check if file is not empty
-        if file_path.stat().st_size == 0:
-            return False, f"File is empty: {file_path}"
-        
-        # Check file extension
-        valid_extensions = ('.mp3', '.wav', '.flac', '.m4a', '.ogg', '.opus')
-        if not file_path.suffix.lower() in valid_extensions:
-            return False, f"Invalid file extension: {file_path.suffix}"
-        
-        return True, "File is valid"
-        
-    except Exception as e:
-        return False, f"Error validating file: {str(e)}"
-
 def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
     # If transcriptions.json exists, load and return it
     if os.path.exists(TRANSCRIPTIONS_JSON):
@@ -102,61 +66,67 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
     print(f"Found {len(audio_files)} audio files to transcribe.")
     
     for filename in tqdm(audio_files, desc="Transcribing files", unit="file"):
-        file_path = Path(output_dir) / filename
+        file_path = os.path.join(output_dir, filename)
         print(f"\n---\nStarting transcription: {file_path}")
         
-        # Validate audio file before transcription
-        is_valid, validation_message = validate_audio_file(file_path)
-        if not is_valid:
-            print(f"❌ File validation failed: {validation_message}")
-            results.append({
-                "filename": filename,
-                "file_path": str(file_path),
-                "total_segments": 0,
-                "segments": [],
-                "error": f"File validation failed: {validation_message}"
-            })
-            continue
-        
-        print(f"✅ File validation passed: {validation_message}")
-        
-        # Retry logic for transcription
+        # Retry logic for transcription with 2-minute timeout
         for attempt in range(MAX_RETRIES):
             try:
-                with open(file_path, "rb") as audio_file:
-                    transcript = openai.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                        response_format="verbose_json",
-                        language=language,
-                        timeout=TIMEOUT
-                    )
+                print(f"Attempt {attempt + 1}/{MAX_RETRIES} for {filename} (timeout: {CHUNK_TIMEOUT}s)")
                 
-                print(f"Finished transcription: {file_path}")
-                print(f"Segments found: {len(transcript.segments)}")
+                # Set timeout for this transcription attempt
+                import signal
                 
-                # Create a single object for this audio file with all segments
-                file_transcription = {
-                    "filename": filename,
-                    "file_path": str(file_path),
-                    "total_segments": len(transcript.segments),
-                    "segments": []
-                }
+                def timeout_handler(signum, frame):
+                    raise TimeoutError(f"Transcription timeout after {CHUNK_TIMEOUT} seconds")
                 
-                # Add all segments with their timestamps and text
-                for i, segment in enumerate(transcript.segments):
-                    print(f"  Segment {i+1}: {segment['start']}s - {segment['end']}s")
-                    file_transcription["segments"].append({
-                        "segment_id": i + 1,
-                        "start": segment['start'],
-                        "end": segment['end'],
-                        "text": segment['text']
-                    })
+                # Set the timeout signal
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(CHUNK_TIMEOUT)
                 
-                results.append(file_transcription)
-                break  # Success, exit retry loop
-                
-            except Exception as e:
+                try:
+                    with open(file_path, "rb") as audio_file:
+                        transcript = openai.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            response_format="verbose_json",
+                            language=language
+                        )
+                    
+                    # Cancel the alarm if transcription succeeds
+                    signal.alarm(0)
+                    
+                    print(f"Finished transcription: {file_path}")
+                    print(f"Segments found: {len(transcript.segments)}")
+                    
+                    # Create a single object for this audio file with all segments
+                    file_transcription = {
+                        "filename": filename,
+                        "file_path": file_path,
+                        "total_segments": len(transcript.segments),
+                        "segments": []
+                    }
+                    
+                    # Add all segments with their timestamps and text
+                    for i, segment in enumerate(transcript.segments):
+                        print(f"  Segment {i+1}: {segment['start']}s - {segment['end']}s")
+                        file_transcription["segments"].append({
+                            "segment_id": i + 1,
+                            "start": segment['start'],
+                            "end": segment['end'],
+                            "text": segment['text']
+                        })
+                    
+                    results.append(file_transcription)
+                    break  # Success, exit retry loop
+                    
+                except TimeoutError as te:
+                    signal.alarm(0)  # Cancel the alarm
+                    print(f"⏰ Transcription timeout for {filename}: {str(te)}")
+                    raise te
+                    
+            except (TimeoutError, Exception) as e:
+                signal.alarm(0)  # Ensure alarm is cancelled
                 print(f"Attempt {attempt + 1} failed for {filename}: {str(e)}")
                 if attempt < MAX_RETRIES - 1:
                     print(f"Retrying in {RETRY_DELAY} seconds...")
@@ -166,11 +136,11 @@ def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
                     # Add a placeholder entry to maintain file order
                     results.append({
                         "filename": filename,
-                        "file_path": str(file_path),
+                        "file_path": file_path,
                         "total_segments": 0,
                         "segments": [],
                         "error": str(e)
-                    })
+                                        })
     
     print("\nAll files transcribed!")
     # Save to transcriptions.json for future fast runs
@@ -237,17 +207,37 @@ Example output:
 Return ONLY the JSON array, no markdown formatting or explanations.
 """
     
-    # Retry logic for GPT analysis
+    # Retry logic for GPT analysis with timeout
     for attempt in range(MAX_RETRIES):
         try:
-            response = openai.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=256,
-                temperature=0.2,
-                timeout=GPT_TIMEOUT
-            )
-            content = response.choices[0].message.content.strip()
+            print(f"GPT analysis attempt {attempt + 1}/{MAX_RETRIES} (timeout: {CHUNK_TIMEOUT}s)")
+            
+            # Set timeout for GPT analysis
+            import signal
+            
+            def gpt_timeout_handler(signum, frame):
+                raise TimeoutError(f"GPT analysis timeout after {CHUNK_TIMEOUT} seconds")
+            
+            # Set the timeout signal
+            signal.signal(signal.SIGALRM, gpt_timeout_handler)
+            signal.alarm(CHUNK_TIMEOUT)
+            
+            try:
+                response = openai.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=256,
+                    temperature=0.2
+                )
+                
+                # Cancel the alarm if GPT call succeeds
+                signal.alarm(0)
+                content = response.choices[0].message.content.strip()
+                
+            except TimeoutError as te:
+                signal.alarm(0)  # Cancel the alarm
+                print(f"⏰ GPT analysis timeout: {str(te)}")
+                raise te
             
             # Clean the response - remove markdown code blocks
             if content.startswith("```json"):
@@ -259,7 +249,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
             
             content = content.strip()
             
-            # Try to parse the JSON output with improved error handling
+            # Try to parse the JSON output
             try:
                 topics = json.loads(content)
                 if isinstance(topics, list):
@@ -283,21 +273,10 @@ Return ONLY the JSON array, no markdown formatting or explanations.
             except json.JSONDecodeError as e:
                 print(f"JSON parsing failed: {e}")
                 print(f"Raw content: {content}")
-                # Try to extract JSON from the response if it's wrapped in text
-                try:
-                    # Look for JSON array pattern
-                    import re
-                    json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                    if json_match:
-                        extracted_json = json_match.group(0)
-                        topics = json.loads(extracted_json)
-                        if isinstance(topics, list):
-                            return topics
-                except:
-                    pass
                 return [{"title": "Unknown", "start": "00:00", "end": f"{max_minutes}:{max_seconds:02d}"}]
                 
-        except Exception as e:
+        except (TimeoutError, Exception) as e:
+            signal.alarm(0)  # Ensure alarm is cancelled
             print(f"GPT analysis attempt {attempt + 1} failed: {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 print(f"Retrying GPT analysis in {RETRY_DELAY} seconds...")
@@ -349,17 +328,37 @@ Example output:
 Return ONLY the JSON array, no markdown formatting or explanations.
 """
     
-    # Retry logic for interaction detection
+    # Retry logic for interaction detection with timeout
     for attempt in range(MAX_RETRIES):
         try:
-            response = openai.chat.completions.create(
-                model=GPT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=256,
-                temperature=0.2,
-                timeout=GPT_TIMEOUT
-            )
-            content = response.choices[0].message.content.strip()
+            print(f"Interaction detection attempt {attempt + 1}/{MAX_RETRIES} (timeout: {CHUNK_TIMEOUT}s)")
+            
+            # Set timeout for interaction detection
+            import signal
+            
+            def interaction_timeout_handler(signum, frame):
+                raise TimeoutError(f"Interaction detection timeout after {CHUNK_TIMEOUT} seconds")
+            
+            # Set the timeout signal
+            signal.signal(signal.SIGALRM, interaction_timeout_handler)
+            signal.alarm(CHUNK_TIMEOUT)
+            
+            try:
+                response = openai.chat.completions.create(
+                    model=GPT_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=256,
+                    temperature=0.2
+                )
+                
+                # Cancel the alarm if interaction detection succeeds
+                signal.alarm(0)
+                content = response.choices[0].message.content.strip()
+                
+            except TimeoutError as te:
+                signal.alarm(0)  # Cancel the alarm
+                print(f"⏰ Interaction detection timeout: {str(te)}")
+                raise te
             
             # Clean the response - remove markdown code blocks
             if content.startswith("```json"):
@@ -397,7 +396,8 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 print(f"Raw content: {content}")
                 return []
                 
-        except Exception as e:
+        except (TimeoutError, Exception) as e:
+            signal.alarm(0)  # Ensure alarm is cancelled
             print(f"Interaction detection attempt {attempt + 1} failed: {str(e)}")
             if attempt < MAX_RETRIES - 1:
                 print(f"Retrying interaction detection in {RETRY_DELAY} seconds...")

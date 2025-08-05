@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 import aiofiles
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pydub import AudioSegment
 import subprocess
@@ -19,11 +19,6 @@ import yt_dlp
 import re
 from dotenv import load_dotenv
 from datetime import datetime
-import time
-import threading
-import hashlib
-import asyncio
-import json
 
 # Load environment variables
 load_dotenv()
@@ -41,9 +36,6 @@ logger = logging.getLogger(__name__)
 # Create Modal app
 app = modal.App("script-trimmer")
 
-# Modal Queue for real-time progress updates
-progress_queue = modal.Queue.from_name("script-trimmer-progress-queue", create_if_missing=True)
-
 # Define the image with all dependencies
 image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirements(
     "requirements_modal.txt"
@@ -56,6 +48,10 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install_from_requirem
 
 # Create a volume for persistent storage
 volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True)
+
+
+
+
 
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
@@ -110,14 +106,7 @@ class PresignedUrlResponse(BaseModel):
 class S3UploadRequest(BaseModel):
     s3_url: str
 
-class ProgressUpdateResponse(BaseModel):
-    s3_url: str
-    status: str  # "pending", "running", "completed", "failed"
-    message: str
-    progress: Optional[float] = None
-    result: Optional[dict] = None
-    error: Optional[str] = None
-    timestamp: str
+
 
 
 
@@ -1639,141 +1628,7 @@ async def get_presigned_url_endpoint(request: PresignedUrlRequest):
         logger.error(f"❌ Error in get_presigned_url_endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating presigned URL: {str(e)}")
 
-@app.function(
-    image=image,
-    cpu=1.0,  # Minimal CPU for job creation
-    memory=1024,  # Minimal RAM for job creation
-    timeout=300,  # 5 minutes timeout
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="POST")
-async def extract_audio_endpoint(request: S3UploadRequest):
-    """Start video processing and return immediately with S3 URL hash for progress tracking"""
-    print("🚀 extract_audio_endpoint called")
-    print(f"☁️  S3 URL: {request.s3_url}")
-    
-    logger.info("🚀 extract_audio_endpoint called")
-    logger.info(f"☁️  S3 URL: {request.s3_url}")
-    
-    try:
-        # Hash the S3 URL for queue key
-        queue_key = hash_s3_url(request.s3_url)
-        logger.info(f"🔑 Queue key generated: {queue_key}")
-        
-        # Send initial progress update
-        send_progress_update(request.s3_url, "pending", "Video processing job started successfully", 0.0)
-        
-        # Prepare response data
-        response_data = {
-            "s3_url": request.s3_url,
-            "queue_key": queue_key,
-            "status": "pending",
-            "message": "Video processing job started successfully",
-            "progress": 0.0
-        }
-        
-        logger.info(f"📤 Returning response immediately: {response_data}")
-        
-        # Start background processing using Modal's remote function
-        import time
-        max_retries = 3
-        retry_delay = 1  # seconds
-        
-        # Start background processing in a separate thread to avoid blocking the response
-        def start_background_processing():
-            for attempt in range(max_retries):
-                try:
-                    # Call the remote function directly without threading
-                    process_video_background.remote(request.s3_url)
-                    logger.info("✅ Background processing triggered successfully")
-                    break  # Success, exit retry loop
-                except Exception as remote_error:
-                    logger.error(f"❌ Remote function call failed (attempt {attempt + 1}/{max_retries}): {str(remote_error)}")
-                    if attempt == max_retries - 1:  # Last attempt
-                        # Send error update to queue
-                        send_progress_update(request.s3_url, "failed", f"Failed to start background processing after {max_retries} attempts: {str(remote_error)}", error=str(remote_error))
-                    else:
-                        # Wait before retrying
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-        
-        # Start background processing in a separate thread
-        bg_thread = threading.Thread(target=start_background_processing)
-        bg_thread.daemon = True
-        bg_thread.start()
-        
-        return response_data
-        
-    except Exception as e:
-        print(f"❌ Error in extract_audio_endpoint: {str(e)}")
-        logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating video processing job: {str(e)}")
 
-@app.function(
-    image=image,
-    cpu=1.0,  # Minimal CPU for status checks
-    memory=1024,  # Minimal RAM for status checks
-    timeout=3600,  # 1 hour timeout for long-running processes
-    volumes={"/data": volume},
-    secrets=[secret]
-)
-@modal.fastapi_endpoint(method="GET")
-async def progress_stream_endpoint(s3_url: str):
-    """Stream real-time progress updates for a given S3 URL"""
-    try:
-        logger.info(f"📊 Starting progress stream for S3 URL: {s3_url}")
-        
-        # Hash the S3 URL to get the queue key
-        queue_key = hash_s3_url(s3_url)
-        logger.info(f"🔑 Queue key for streaming: {queue_key}")
-        
-        async def generate_progress_stream():
-            """Generate Server-Sent Events stream for progress updates"""
-            try:
-                # Send initial connection message
-                yield f"data: {json.dumps({'type': 'connection', 'message': 'Connected to progress stream', 's3_url': s3_url})}\n\n"
-                
-                # Stream progress updates from the queue
-                while True:
-                    try:
-                        # Get the next update from the queue (non-blocking)
-                        update = progress_queue.get(timeout=1.0)
-                        if update:
-                            received_key, update_data = update
-                            
-                            # Only send updates for this specific S3 URL
-                            if received_key == queue_key:
-                                yield f"data: {json.dumps(update_data)}\n\n"
-                                
-                                # If the status is completed or failed, end the stream
-                                if update_data.get('status') in ['completed', 'failed']:
-                                    logger.info(f"📊 Progress stream completed for S3 URL: {s3_url}")
-                                    break
-                    except Exception as queue_error:
-                        # If no update available, send a heartbeat
-                        yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now().isoformat()})}\n\n"
-                        await asyncio.sleep(1)
-                        
-            except Exception as e:
-                logger.error(f"❌ Error in progress stream: {str(e)}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        
-        return StreamingResponse(
-            generate_progress_stream(),
-            media_type="text/plain",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Type": "text/event-stream",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control"
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error starting progress stream: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error starting progress stream: {str(e)}")
 
 @app.function(
     image=image,
@@ -1783,201 +1638,42 @@ async def progress_stream_endpoint(s3_url: str):
     volumes={"/data": volume},
     secrets=[secret]
 )
-def process_video_background(s3_url: str):
-    """Background function to process video with real-time progress updates via Modal Queue"""
+@modal.fastapi_endpoint(method="POST")
+async def extract_audio_endpoint(request: S3UploadRequest):
+    """Process video from S3 URL directly"""
     try:
-        logger.info(f"🚀 Starting background processing for S3 URL: {s3_url}")
-        
-        # Check for existing checkpoint
-        checkpoint_file = Path("processing_checkpoint.json")
-        if checkpoint_file.exists():
-            try:
-                with open(checkpoint_file, "r") as f:
-                    import json
-                    checkpoint = json.load(f)
-                    if checkpoint.get("s3_url") == s3_url:
-                        logger.info("🔄 Found existing checkpoint, resuming processing...")
-                        # Resume from checkpoint
-                        current_stage = checkpoint.get("stage", "start")
-                        if current_stage == "transcription_completed":
-                            logger.info("✅ Transcription already completed, skipping to video segments...")
-                            send_progress_update(s3_url, "running", "Transcription completed, extracting video segments...", 85.0)
-                            # Skip to video segment extraction
-                            video_path = Path(checkpoint.get("video_path"))
-                            all_segments = run_video_segment_extraction(video_path)
-                            # Continue with rest of processing...
-                        elif current_stage == "video_segments_completed":
-                            logger.info("✅ Video segments already completed, skipping to S3 upload...")
-                            send_progress_update(s3_url, "running", "Video segments completed, uploading to S3...", 95.0)
-                            # Skip to S3 upload
-                            # Continue with rest of processing...
-            except Exception as e:
-                logger.warning(f"⚠️  Error reading checkpoint: {e}, starting fresh...")
-        
-        # Clean up remnant files from previous runs
-        cleanup_previous_files()
-        
-        # Send initial progress update
-        send_progress_update(s3_url, "running", "Starting video processing...", 5.0)
+        logger.info("=" * 60)
+        logger.info("🎬 EXTRACT AUDIO ENDPOINT CALLED")
+        logger.info("=" * 60)
+        logger.info(f"📤 S3 URL: {request.s3_url}")
         
         # Create directories
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
         
-        send_progress_update(s3_url, "running", "Downloading video from S3...", 15.0)
+        logger.info("📂 Directories created successfully")
         
-        # Download video from S3
-        video_path = download_video_from_s3(s3_url, UPLOAD_DIR)
-        if not video_path:
-            raise Exception("Failed to download video from S3")
+        # Process the video from S3 URL directly
+        logger.info("🔄 Starting video processing from S3...")
+        result = process_video_from_s3(request.s3_url)
         
-        send_progress_update(s3_url, "running", "Extracting audio...", 30.0)
+        logger.info("✅ Processing completed successfully")
+        logger.info("=" * 60)
+        logger.info("✅ EXTRACT AUDIO ENDPOINT COMPLETED")
+        logger.info("=" * 60)
         
-        # Extract audio
-        file_id = str(uuid.uuid4())
-        audio_filename = f"{file_id}_s3_audio.mp3"
-        audio_path = OUTPUT_DIR / audio_filename
-        
-        cmd = [
-            'ffmpeg',
-            '-i', str(video_path),
-            '-vn',
-            '-acodec', 'mp3',
-            '-ab', '192k',
-            '-y',
-            str(audio_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            raise Exception(f"FFmpeg error: {result.stderr}")
-        
-        send_progress_update(s3_url, "running", "Processing audio chunks...", 50.0)
-        
-        # Process audio chunks
-        audio_size_mb = get_file_size_mb(audio_path)
-        logger.info(f"📊 Audio file size: {audio_size_mb:.2f}MB (max before chunking: {MAX_AUDIO_SIZE_MB}MB)")
-        
-        if audio_size_mb > MAX_AUDIO_SIZE_MB:
-            logger.info(f"✂️  Audio file exceeds {MAX_AUDIO_SIZE_MB}MB, starting chunking process...")
-            # Create chunks
-            chunk_files = chunk_audio(audio_path, OUTPUT_DIR, CHUNK_DURATION_MINUTES)
-            
-            # Clean up original large audio file
-            logger.info("🗑️  Cleaning up original large audio file...")
-            audio_path.unlink()
-            logger.info("✅ Original audio file deleted")
-        else:
-            logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
-            chunk_files = [str(audio_path)]
-        
-        send_progress_update(s3_url, "running", "Transcribing audio...", 70.0)
-        
-        # Transcribe audio
-        import sys
-        sys.path.append("/root")
-        import transcribe_segments
-        
-        try:
-            audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
-            logger.info("✅ Transcription completed. Now analyzing topics...")
-            segment_json = transcribe_segments.create_segment_json(audio_files)
-            with open("segments.json", "w") as f:
-                import json
-                json.dump(segment_json, f, indent=2)
-            logger.info("✅ Topic analysis and segment creation completed!")
-            
-            # Save checkpoint after transcription
-            checkpoint_data = {
-                "s3_url": s3_url,
-                "stage": "transcription_completed",
-                "video_path": str(video_path),
-                "timestamp": datetime.now().isoformat()
-            }
-            with open("processing_checkpoint.json", "w") as f:
-                import json
-                json.dump(checkpoint_data, f, indent=2)
-            logger.info("💾 Checkpoint saved: transcription completed")
-            
-        except Exception as e:
-            logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
-            raise Exception(f"Transcription failed: {str(e)}")
-        
-        send_progress_update(s3_url, "running", "Extracting video segments...", 85.0)
-        
-        # Extract video segments
-        all_segments = run_video_segment_extraction(video_path)
-        
-        # Separate segments
-        video_segments = []
-        interaction_segments = []
-        for segment_path in all_segments:
-            segment_file = Path(segment_path)
-            if "interactions" in str(segment_file):
-                interaction_segments.append(segment_path)
-            else:
-                video_segments.append(segment_path)
-        
-        # Save checkpoint after video segment extraction
-        checkpoint_data = {
-            "s3_url": s3_url,
-            "stage": "video_segments_completed",
-            "video_path": str(video_path),
-            "video_segments": video_segments,
-            "interaction_segments": interaction_segments,
-            "timestamp": datetime.now().isoformat()
-        }
-        with open("processing_checkpoint.json", "w") as f:
-            import json
-            json.dump(checkpoint_data, f, indent=2)
-        logger.info("💾 Checkpoint saved: video segments completed")
-        
-        send_progress_update(s3_url, "running", "Uploading segments to S3...", 95.0)
-        
-        # Upload to S3
-        s3_urls = []
-        if all_segments:
-            s3_urls = upload_video_segments_to_s3(all_segments)
-        
-        # Clean up intermediate files after successful video segment extraction
-        if all_segments:
-            cleanup_intermediate_files(video_path, audio_path)
-        else:
-            logger.warning("⚠️  No video segments created, keeping intermediate files for debugging")
-        
-        # Final result
-        result = {
-            "message": f"Video processed successfully",
-            "s3_url": s3_url,
-            "chunk_files": chunk_files,
-            "total_chunks": len(chunk_files),
-            "video_segments": video_segments,
-            "total_video_segments": len(video_segments),
-            "interaction_segments": interaction_segments,
-            "total_interaction_segments": len(interaction_segments),
-            "segments_json_path": "segments.json",
-            "s3_urls": s3_urls
-        }
-        
-        # Clean up checkpoint file after successful completion
-        checkpoint_file = Path("processing_checkpoint.json")
-        if checkpoint_file.exists():
-            try:
-                checkpoint_file.unlink()
-                logger.info("🗑️  Checkpoint file cleaned up after successful completion")
-            except Exception as e:
-                logger.warning(f"⚠️  Could not clean up checkpoint file: {e}")
-        
-        send_progress_update(s3_url, "completed", "Video processing completed successfully!", 100.0, result)
-        logger.info(f"✅ Background processing completed for S3 URL: {s3_url}")
+        return AudioExtractionResponse(**result)
         
     except Exception as e:
-        logger.error(f"❌ Background processing failed for S3 URL {s3_url}: {str(e)}")
-        try:
-            send_progress_update(s3_url, "failed", f"Processing failed: {str(e)}", error=str(e))
-        except Exception as update_error:
-            logger.error(f"❌ Failed to send error update for S3 URL {s3_url}: {str(update_error)}")
+        logger.error(f"❌ Error in extract_audio_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing video from S3: {str(e)}")
+
+
+
+
+
+
 
 def generate_presigned_url(filename: str, content_type: str = "video/mp4") -> Optional[dict]:
     """Generate a presigned URL for direct S3 upload"""
@@ -2017,32 +1713,3 @@ def generate_presigned_url(filename: str, content_type: str = "video/mp4") -> Op
     except Exception as e:
         logger.error(f"❌ Error generating presigned URL: {e}")
         return None
-
-# Helper function to hash S3 URL for queue key
-def hash_s3_url(s3_url: str) -> str:
-    """Hash S3 URL to use as queue key"""
-    return hashlib.md5(s3_url.encode()).hexdigest()
-
-# Progress update function
-def send_progress_update(s3_url: str, status: str, message: str, progress: float = None, result: dict = None, error: str = None):
-    """Send progress update to Modal Queue"""
-    try:
-        queue_key = hash_s3_url(s3_url)
-        update_data = {
-            "s3_url": s3_url,
-            "status": status,
-            "message": message,
-            "timestamp": datetime.now().isoformat()
-        }
-        if progress is not None:
-            update_data["progress"] = progress
-        if result is not None:
-            update_data["result"] = result
-        if error is not None:
-            update_data["error"] = error
-        
-        progress_queue.put((queue_key, update_data))
-        logger.info(f"📤 Progress update sent to queue: {status} - {message} ({progress}%)")
-    except Exception as e:
-        logger.error(f"❌ Failed to send progress update: {str(e)}")
-

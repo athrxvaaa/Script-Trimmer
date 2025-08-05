@@ -14,9 +14,9 @@ TRANSCRIPTIONS_JSON = "transcriptions.json"
 GPT_MODEL = "gpt-4o-mini"
 
 # Retry settings
-MAX_RETRIES = 3
-RETRY_DELAY = 2
-TIMEOUT = 60  # seconds
+MAX_RETRIES = 5
+RETRY_DELAY = 5
+TIMEOUT = 300  # 5 minutes for transcription
 
 REFERENCE_PROMPT = '''
 You are analyzing a transcript of a lecture to extract meaningful **main topics** and **subtopics**.

@@ -342,6 +342,49 @@
         border-radius: 8px;
         background: #000;
       }
+
+      .s3-input-container {
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        margin: 20px 0;
+        flex-wrap: wrap;
+      }
+
+      .s3-url-input {
+        flex: 1;
+        min-width: 300px;
+        padding: 15px;
+        border: 2px solid #e0e0e0;
+        border-radius: 10px;
+        font-size: 1rem;
+        transition: border-color 0.3s ease;
+      }
+
+      .s3-url-input:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .s3-info {
+        background: #f0f2ff;
+        padding: 15px;
+        border-radius: 10px;
+        margin: 15px 0;
+        border-left: 4px solid #667eea;
+      }
+
+      .s3-info h4 {
+        color: #667eea;
+        margin-bottom: 8px;
+      }
+
+      .s3-info p {
+        color: #666;
+        font-family: monospace;
+        word-break: break-all;
+        margin: 0;
+      }
     </style>
   </head>
   <body>
@@ -368,6 +411,26 @@
               class="file-input"
               accept="video/*"
             />
+          </div>
+        </div>
+
+        <!-- S3 URL Input Section -->
+        <div class="upload-section">
+          <h3>🌐 Or Enter S3 URL</h3>
+          <div class="s3-input-container">
+            <input
+              type="url"
+              id="s3UrlInput"
+              placeholder="https://your-bucket.s3.region.amazonaws.com/video.mp4"
+              class="s3-url-input"
+            />
+            <button class="btn" id="processS3Btn" style="display: none">
+              🚀 Process S3 Video
+            </button>
+          </div>
+          <div class="s3-info" id="s3Info" style="display: none">
+            <h4>📋 S3 URL:</h4>
+            <p id="s3UrlDisplay"></p>
           </div>
         </div>
 
@@ -421,11 +484,13 @@
     </div>
 
     <script>
-      // API Configuration - Updated for boto3 deployment
+      // API Configuration - Updated for Modal Queue deployment
       const API_BASE_URL =
-        "https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-get-presigned-url-endpoint.modal.run";
       const PROCESSING_API_URL =
-        "https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run";
+        "https://lu-labs--script-trimmer-extract-audio-endpoint.modal.run";
+      const PROGRESS_STREAM_URL =
+        "https://lu-labs--script-trimmer-progress-stream-endpoint.modal.run";
 
       // Global variables
       let selectedFile = null;
@@ -442,6 +507,12 @@
       const processBtn = document.getElementById("processBtn");
       const resultsSection = document.getElementById("resultsSection");
 
+      // S3 URL elements
+      const s3UrlInput = document.getElementById("s3UrlInput");
+      const processS3Btn = document.getElementById("processS3Btn");
+      const s3Info = document.getElementById("s3Info");
+      const s3UrlDisplay = document.getElementById("s3UrlDisplay");
+
       // Event listeners
       uploadArea.addEventListener("click", () => fileInput.click());
       uploadArea.addEventListener("dragover", handleDragOver);
@@ -450,6 +521,10 @@
       fileInput.addEventListener("change", handleFileSelect);
       uploadBtn.addEventListener("click", handleUpload);
       processBtn.addEventListener("click", handleProcess);
+
+      // S3 URL event listeners
+      s3UrlInput.addEventListener("input", handleS3UrlInput);
+      processS3Btn.addEventListener("click", handleS3Process);
 
       // Drag and drop handlers
       function handleDragOver(e) {
@@ -700,7 +775,98 @@
         });
       }
 
-      // Process video
+      // S3 URL input handler
+      function handleS3UrlInput(e) {
+        const url = e.target.value.trim();
+        if (url && isValidS3Url(url)) {
+          processS3Btn.style.display = "inline-block";
+          s3UrlDisplay.textContent = url;
+          s3Info.style.display = "block";
+        } else {
+          processS3Btn.style.display = "none";
+          s3Info.style.display = "none";
+        }
+      }
+
+      // Validate S3 URL format
+      function isValidS3Url(url) {
+        try {
+          const urlObj = new URL(url);
+          return (
+            urlObj.hostname.includes(".s3.") &&
+            urlObj.hostname.includes(".amazonaws.com")
+          );
+        } catch (error) {
+          return false;
+        }
+      }
+
+      // Process S3 URL directly
+      async function handleS3Process() {
+        const s3Url = s3UrlInput.value.trim();
+
+        if (!s3Url) {
+          showStatus("Please enter a valid S3 URL.", "error");
+          return;
+        }
+
+        if (!isValidS3Url(s3Url)) {
+          showStatus("Please enter a valid S3 URL format.", "error");
+          return;
+        }
+
+        processS3Btn.disabled = true;
+        processS3Btn.innerHTML =
+          '<span class="loading"></span>Processing S3 video...';
+
+        // Show progress section
+        progressSection.style.display = "block";
+        updateProgress(
+          0,
+          "Starting S3 video processing with real-time updates..."
+        );
+
+        try {
+          console.log(
+            "🚀 Sending S3 processing request to:",
+            PROCESSING_API_URL
+          );
+          console.log("📤 Request payload:", { s3_url: s3Url });
+
+          // Start the processing job
+          const response = await fetch(PROCESSING_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              s3_url: s3Url,
+            }),
+          });
+
+          console.log("📥 Processing response status:", response.status);
+          const data = await response.json();
+          console.log("📊 Processing response data:", data);
+
+          if (response.ok) {
+            showStatus("✅ S3 processing job started successfully!", "success");
+
+            // Start real-time progress streaming
+            startProgressStream(s3Url);
+          } else {
+            console.error("❌ Processing failed with status:", response.status);
+            console.error("❌ Error details:", data);
+            throw new Error(data.detail || data.message || "Processing failed");
+          }
+        } catch (error) {
+          console.error("❌ Processing error:", error);
+          showStatus(`Processing failed: ${error.message}`, "error");
+          processS3Btn.disabled = false;
+          processS3Btn.innerHTML = "🚀 Process S3 Video";
+        }
+      }
+
+      // Process video with real-time progress updates
       async function handleProcess() {
         if (!s3Url) {
           showStatus(
@@ -715,17 +881,14 @@
           '<span class="loading"></span>Processing video...';
         updateProgress(
           0,
-          "Starting video processing (this may take 20-30 minutes for large videos)..."
+          "Starting video processing with real-time updates..."
         );
 
         try {
           console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
           console.log("📤 Request payload:", { s3_url: s3Url });
 
-          // Create AbortController for timeout - 10 minutes for initial request
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
-
+          // Start the processing job
           const response = await fetch(PROCESSING_API_URL, {
             method: "POST",
             headers: {
@@ -734,21 +897,17 @@
             body: JSON.stringify({
               s3_url: s3Url,
             }),
-            signal: controller.signal,
           });
 
-          clearTimeout(timeoutId);
-
           console.log("📥 Processing response status:", response.status);
-          console.log("📥 Processing response headers:", response.headers);
-
           const data = await response.json();
           console.log("📊 Processing response data:", data);
 
           if (response.ok) {
-            updateProgress(100, "Processing completed!");
-            showStatus("Video processing completed successfully!", "success");
-            displayResults(data);
+            showStatus("✅ Processing job started successfully!", "success");
+
+            // Start real-time progress streaming
+            startProgressStream(s3Url);
           } else {
             console.error("❌ Processing failed with status:", response.status);
             console.error("❌ Error details:", data);
@@ -756,19 +915,79 @@
           }
         } catch (error) {
           console.error("❌ Processing error:", error);
-          if (error.name === "AbortError") {
-            showStatus(
-              "⏰ Request timeout - Large videos take 20-30 minutes to process. The backend may still be working. Please wait and refresh the page in 20-30 minutes to check for results.",
-              "warning"
-            );
-            updateProgress(50, "Processing may be running in background...");
-          } else {
-            showStatus(`Processing failed: ${error.message}`, "error");
-          }
-        } finally {
+          showStatus(`Processing failed: ${error.message}`, "error");
           processBtn.disabled = false;
           processBtn.innerHTML = "⚙️ Process Video";
         }
+      }
+
+      // Start real-time progress streaming
+      function startProgressStream(s3Url) {
+        console.log("📡 Starting progress stream for:", s3Url);
+
+        const eventSource = new EventSource(
+          `${PROGRESS_STREAM_URL}?s3_url=${encodeURIComponent(s3Url)}`
+        );
+
+        eventSource.onopen = function (event) {
+          console.log("🔗 Progress stream connected");
+          showStatus("📡 Connected to real-time progress stream", "info");
+        };
+
+        eventSource.onmessage = function (event) {
+          try {
+            const data = JSON.parse(event.data);
+            console.log("📊 Progress update received:", data);
+
+            if (data.type === "connection") {
+              showStatus("✅ Connected to progress stream", "success");
+            } else if (data.type === "heartbeat") {
+              // Heartbeat - keep connection alive
+              console.log("💓 Progress stream heartbeat");
+            } else {
+              // Progress update
+              if (data.status === "running") {
+                updateProgress(data.progress || 0, data.message);
+                showStatus(`🔄 ${data.message}`, "info");
+              } else if (data.status === "completed") {
+                updateProgress(100, "Processing completed successfully!");
+                showStatus(
+                  "🎉 Video processing completed successfully!",
+                  "success"
+                );
+                displayResults(data.result);
+                eventSource.close();
+                processBtn.disabled = false;
+                processBtn.innerHTML = "⚙️ Process Video";
+                processS3Btn.disabled = false;
+                processS3Btn.innerHTML = "🚀 Process S3 Video";
+              } else if (data.status === "failed") {
+                updateProgress(0, "Processing failed");
+                showStatus(
+                  `❌ Processing failed: ${data.error || data.message}`,
+                  "error"
+                );
+                eventSource.close();
+                processBtn.disabled = false;
+                processBtn.innerHTML = "⚙️ Process Video";
+                processS3Btn.disabled = false;
+                processS3Btn.innerHTML = "🚀 Process S3 Video";
+              }
+            }
+          } catch (error) {
+            console.error("❌ Error parsing progress update:", error);
+          }
+        };
+
+        eventSource.onerror = function (event) {
+          console.error("❌ Progress stream error:", event);
+          showStatus("❌ Progress stream connection lost", "error");
+          eventSource.close();
+          processBtn.disabled = false;
+          processBtn.innerHTML = "⚙️ Process Video";
+          processS3Btn.disabled = false;
+          processS3Btn.innerHTML = "🚀 Process S3 Video";
+        };
       }
 
       // Display results

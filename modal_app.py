@@ -60,11 +60,6 @@ volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
 
-# OpenAI API key configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.warning("⚠️  OPENAI_API_KEY not found in environment variables")
-
 # Configuration
 UPLOAD_DIR = Path("/data/uploads")
 OUTPUT_DIR = Path("/data/output")
@@ -931,29 +926,16 @@ def process_video_from_s3(s3_url: str) -> dict:
             
             # After chunking, run transcription and topic analysis
             logger.info("📝 Starting transcription and topic analysis...")
-            send_progress_update(s3_url, "running", "Starting audio transcription and analysis...", 40.0)
-            
             try:
-                # Validate OpenAI API key before transcription
-                if not OPENAI_API_KEY:
-                    raise Exception("OpenAI API key not configured. Please add OPENAI_API_KEY to Modal secrets.")
-                
-                logger.info("🔑 OpenAI API key validated")
                 audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
                 logger.info("✅ Transcription completed. Now analyzing topics...")
-                send_progress_update(s3_url, "running", "Transcription completed, analyzing topics...", 60.0)
-                
                 segment_json = transcribe_segments.create_segment_json(audio_files)
                 with open("segments.json", "w") as f:
                     import json
                     json.dump(segment_json, f, indent=2)
                 logger.info("✅ Topic analysis and segment creation completed!")
-                send_progress_update(s3_url, "running", "Topic analysis completed, extracting video segments...", 70.0)
             except Exception as e:
-                error_msg = f"Error during transcription or topic analysis: {str(e)}"
-                logger.error(f"❌ {error_msg}")
-                send_progress_update(s3_url, "failed", error_msg, error=error_msg)
-                raise Exception(error_msg)
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
             
             # Run video segment extraction after transcription
             logger.info("🎬 Starting video segment extraction after transcription...")
@@ -1022,29 +1004,16 @@ def process_video_from_s3(s3_url: str) -> dict:
             
             # After chunking, run transcription and topic analysis
             logger.info("📝 Starting transcription and topic analysis...")
-            send_progress_update(s3_url, "running", "Starting audio transcription and analysis...", 40.0)
-            
             try:
-                # Validate OpenAI API key before transcription
-                if not OPENAI_API_KEY:
-                    raise Exception("OpenAI API key not configured. Please add OPENAI_API_KEY to Modal secrets.")
-                
-                logger.info("🔑 OpenAI API key validated")
                 audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
                 logger.info("✅ Transcription completed. Now analyzing topics...")
-                send_progress_update(s3_url, "running", "Transcription completed, analyzing topics...", 60.0)
-                
                 segment_json = transcribe_segments.create_segment_json(audio_files)
                 with open("segments.json", "w") as f:
                     import json
                     json.dump(segment_json, f, indent=2)
                 logger.info("✅ Topic analysis and segment creation completed!")
-                send_progress_update(s3_url, "running", "Topic analysis completed, extracting video segments...", 70.0)
             except Exception as e:
-                error_msg = f"Error during transcription or topic analysis: {str(e)}"
-                logger.error(f"❌ {error_msg}")
-                send_progress_update(s3_url, "failed", error_msg, error=error_msg)
-                raise Exception(error_msg)
+                logger.error(f"❌ Error during transcription or topic analysis: {str(e)}")
 
             # Run video segment extraction after transcription
             logger.info("🎬 Starting video segment extraction after transcription...")

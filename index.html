@@ -959,7 +959,11 @@
           >
             📦 Download All Segments
           </button>
-          <button id="clearResultsBtn" class="clear-results-btn" style="display: none;">
+          <button
+            id="clearResultsBtn"
+            class="clear-results-btn"
+            style="display: none"
+          >
             🗑️ Clear Results
           </button>
         </div>
@@ -985,9 +989,9 @@
 
       // Local storage keys
       const STORAGE_KEYS = {
-        RESULTS: 'script_trimmer_results',
-        S3_URL: 'script_trimmer_s3_url',
-        TIMESTAMP: 'script_trimmer_timestamp'
+        RESULTS: "script_trimmer_results",
+        S3_URL: "script_trimmer_s3_url",
+        TIMESTAMP: "script_trimmer_timestamp",
       };
 
       // DOM elements
@@ -1029,9 +1033,12 @@
           const storageData = {
             results: data,
             s3_url: s3Url,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           };
-          localStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(storageData));
+          localStorage.setItem(
+            STORAGE_KEYS.RESULTS,
+            JSON.stringify(storageData)
+          );
           console.log("💾 Data saved to local storage");
         } catch (error) {
           console.error("❌ Error saving to local storage:", error);
@@ -1046,22 +1053,25 @@
             const timestamp = new Date(data.timestamp);
             const now = new Date();
             const hoursDiff = (now - timestamp) / (1000 * 60 * 60);
-            
+
             // Only restore if data is less than 24 hours old
             if (hoursDiff < 24) {
               console.log("📂 Restoring data from local storage");
               currentResults = data.results;
               s3Url = data.s3_url;
-              
+
               // Update S3 URL input if it exists
               if (s3UrlInput && s3Url) {
                 s3UrlInput.value = s3Url;
               }
-              
+
               // Display restored results
               if (currentResults) {
                 displayResults(currentResults);
-                showStatus("📂 Restored previous results from local storage", "info");
+                showStatus(
+                  "📂 Restored previous results from local storage",
+                  "info"
+                );
               }
               return true;
             } else {
@@ -1089,7 +1099,7 @@
       }
 
       // Load data on page load
-      document.addEventListener('DOMContentLoaded', function() {
+      document.addEventListener("DOMContentLoaded", function () {
         loadFromLocalStorage();
       });
 
@@ -1719,7 +1729,11 @@
       // Download all segments
       async function downloadAllSegments() {
         // Use stored results if available, otherwise check DOM
-        if (!currentResults || !currentResults.s3_urls || currentResults.s3_urls.length === 0) {
+        if (
+          !currentResults ||
+          !currentResults.s3_urls ||
+          currentResults.s3_urls.length === 0
+        ) {
           showStatus("No segments available to download.", "error");
           return;
         }
@@ -1732,7 +1746,7 @@
           const segments = currentResults.s3_urls.map((item, index) => ({
             url: item.s3_url,
             filename: item.filename || `segment_${index + 1}.mp4`,
-            segment_type: item.segment_type
+            segment_type: item.segment_type,
           }));
 
           if (segments.length === 0) {
@@ -1818,7 +1832,11 @@
 
       // Clear results
       function clearResults() {
-        if (confirm("Are you sure you want to clear all processing results and local storage?")) {
+        if (
+          confirm(
+            "Are you sure you want to clear all processing results and local storage?"
+          )
+        ) {
           clearLocalStorage();
           currentResults = null;
           s3Url = null;

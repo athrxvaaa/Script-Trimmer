@@ -314,6 +314,30 @@
         transform: none;
       }
 
+      .clear-results-btn {
+        background: #ef4444;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        margin-left: 10px;
+      }
+
+      .clear-results-btn:hover {
+        background: #dc2626;
+        transform: translateY(-1px);
+      }
+
+      .clear-results-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
       .results-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -935,6 +959,9 @@
           >
             📦 Download All Segments
           </button>
+          <button id="clearResultsBtn" class="clear-results-btn" style="display: none;">
+            🗑️ Clear Results
+          </button>
         </div>
 
         <div class="results-grid" id="resultsGrid"></div>
@@ -954,6 +981,14 @@
       let selectedFile = null;
       let presignedUrl = null;
       let s3Url = null;
+      let currentResults = null; // Store current results for persistence
+
+      // Local storage keys
+      const STORAGE_KEYS = {
+        RESULTS: 'script_trimmer_results',
+        S3_URL: 'script_trimmer_s3_url',
+        TIMESTAMP: 'script_trimmer_timestamp'
+      };
 
       // DOM elements
       const uploadArea = document.getElementById("dragDropZone");
@@ -965,6 +1000,7 @@
       const processBtn = document.getElementById("processBtn");
       const resultsSection = document.getElementById("resultsSection");
       const downloadAllBtn = document.getElementById("downloadAllBtn");
+      const clearResultsBtn = document.getElementById("clearResultsBtn");
 
       // S3 URL elements
       const s3UrlInput = document.getElementById("s3UrlInput");
@@ -981,10 +1017,81 @@
       uploadBtn.addEventListener("click", handleUpload);
       processBtn.addEventListener("click", handleProcess);
       downloadAllBtn.addEventListener("click", downloadAllSegments);
+      clearResultsBtn.addEventListener("click", clearResults);
 
       // S3 URL event listeners
       s3UrlInput.addEventListener("input", handleS3UrlInput);
       processS3Btn.addEventListener("click", handleS3Process);
+
+      // Local storage functions
+      function saveToLocalStorage(data, s3Url) {
+        try {
+          const storageData = {
+            results: data,
+            s3_url: s3Url,
+            timestamp: new Date().toISOString()
+          };
+          localStorage.setItem(STORAGE_KEYS.RESULTS, JSON.stringify(storageData));
+          console.log("💾 Data saved to local storage");
+        } catch (error) {
+          console.error("❌ Error saving to local storage:", error);
+        }
+      }
+
+      function loadFromLocalStorage() {
+        try {
+          const stored = localStorage.getItem(STORAGE_KEYS.RESULTS);
+          if (stored) {
+            const data = JSON.parse(stored);
+            const timestamp = new Date(data.timestamp);
+            const now = new Date();
+            const hoursDiff = (now - timestamp) / (1000 * 60 * 60);
+            
+            // Only restore if data is less than 24 hours old
+            if (hoursDiff < 24) {
+              console.log("📂 Restoring data from local storage");
+              currentResults = data.results;
+              s3Url = data.s3_url;
+              
+              // Update S3 URL input if it exists
+              if (s3UrlInput && s3Url) {
+                s3UrlInput.value = s3Url;
+              }
+              
+              // Display restored results
+              if (currentResults) {
+                displayResults(currentResults);
+                showStatus("📂 Restored previous results from local storage", "info");
+              }
+              return true;
+            } else {
+              // Clear old data
+              clearLocalStorage();
+              console.log("🗑️ Cleared old local storage data (>24 hours)");
+            }
+          }
+        } catch (error) {
+          console.error("❌ Error loading from local storage:", error);
+          clearLocalStorage();
+        }
+        return false;
+      }
+
+      function clearLocalStorage() {
+        try {
+          localStorage.removeItem(STORAGE_KEYS.RESULTS);
+          localStorage.removeItem(STORAGE_KEYS.S3_URL);
+          localStorage.removeItem(STORAGE_KEYS.TIMESTAMP);
+          console.log("🗑️ Local storage cleared");
+        } catch (error) {
+          console.error("❌ Error clearing local storage:", error);
+        }
+      }
+
+      // Load data on page load
+      document.addEventListener('DOMContentLoaded', function() {
+        loadFromLocalStorage();
+      });
 
       // Drag and drop handlers
       function handleDragOver(e) {
@@ -1473,11 +1580,19 @@
         const resultsGrid = document.getElementById("resultsGrid");
         resultsGrid.innerHTML = "";
 
+        // Store current results for persistence
+        currentResults = data;
+
+        // Save to local storage
+        saveToLocalStorage(data, s3Url);
+
         // Show download button if segments are available
         if (data.s3_urls && data.s3_urls.length > 0) {
           downloadAllBtn.style.display = "block";
+          clearResultsBtn.style.display = "block";
         } else {
           downloadAllBtn.style.display = "none";
+          clearResultsBtn.style.display = "none";
         }
 
         // Video segments with preview
@@ -1603,39 +1718,36 @@
 
       // Download all segments
       async function downloadAllSegments() {
-        // Get the current results data
-        const resultsGrid = document.getElementById("resultsGrid");
-        if (!resultsGrid.children.length) {
+        // Use stored results if available, otherwise check DOM
+        if (!currentResults || !currentResults.s3_urls || currentResults.s3_urls.length === 0) {
           showStatus("No segments available to download.", "error");
           return;
         }
 
         downloadAllBtn.disabled = true;
-        downloadAllBtn.innerHTML = '<span class="loading"></span>Preparing download...';
+        downloadAllBtn.innerHTML =
+          '<span class="loading"></span>Preparing download...';
 
         try {
-          // Get all video elements from the results
-          const videoElements = resultsGrid.querySelectorAll('video source');
-          const segments = [];
-          
-          videoElements.forEach((source, index) => {
-            const videoContainer = source.closest('.video-preview-item');
-            const titleElement = videoContainer.querySelector('h4');
-            const filename = titleElement ? titleElement.textContent.replace('🎬 ', '') : `segment_${index + 1}.mp4`;
-            segments.push({
-              url: source.src,
-              filename: filename
-            });
-          });
+          const segments = currentResults.s3_urls.map((item, index) => ({
+            url: item.s3_url,
+            filename: item.filename || `segment_${index + 1}.mp4`,
+            segment_type: item.segment_type
+          }));
 
           if (segments.length === 0) {
             throw new Error("No video segments found");
           }
 
-          showStatus(`📦 Preparing ${segments.length} segments for download...`, "info");
+          showStatus(
+            `📦 Preparing ${segments.length} segments for download...`,
+            "info"
+          );
 
           // Download each segment and create a ZIP file
-          const JSZip = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+          const JSZip = await import(
+            "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"
+          );
           const zip = new JSZip.default();
 
           // Create folders for different segment types
@@ -1649,22 +1761,23 @@
             try {
               const response = await fetch(segment.url);
               if (!response.ok) {
-                console.warn(`Failed to download ${segment.filename}: ${response.statusText}`);
+                console.warn(
+                  `Failed to download ${segment.filename}: ${response.statusText}`
+                );
                 continue;
               }
-              
+
               const blob = await response.blob();
-              
-              // Determine folder based on filename
-              if (segment.filename.toLowerCase().includes('interaction')) {
+
+              // Determine folder based on segment type
+              if (segment.segment_type === "interaction") {
                 interactionFolder.file(segment.filename, blob);
               } else {
                 topicFolder.file(segment.filename, blob);
               }
-              
+
               downloadedCount++;
               downloadAllBtn.innerHTML = `<span class="loading"></span>Downloading... (${downloadedCount}/${totalSegments})`;
-              
             } catch (error) {
               console.error(`Error downloading ${segment.filename}:`, error);
             }
@@ -1675,26 +1788,51 @@
           }
 
           // Generate and download the ZIP file
-          downloadAllBtn.innerHTML = '<span class="loading"></span>Creating ZIP file...';
+          downloadAllBtn.innerHTML =
+            '<span class="loading"></span>Creating ZIP file...';
           const zipBlob = await zip.generateAsync({ type: "blob" });
-          
+
           const url = URL.createObjectURL(zipBlob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `video_segments_${new Date().toISOString().slice(0, 10)}.zip`;
+          a.download = `video_segments_${new Date()
+            .toISOString()
+            .slice(0, 10)}.zip`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
-          
-          showStatus(`✅ Successfully downloaded ${downloadedCount} segments!`, "success");
-          
+
+          showStatus(
+            `✅ Successfully downloaded ${downloadedCount} segments!`,
+            "success"
+          );
         } catch (error) {
           console.error("Download error:", error);
           showStatus(`Download failed: ${error.message}`, "error");
         } finally {
           downloadAllBtn.disabled = false;
           downloadAllBtn.innerHTML = "📦 Download All Segments";
+        }
+      }
+
+      // Clear results
+      function clearResults() {
+        if (confirm("Are you sure you want to clear all processing results and local storage?")) {
+          clearLocalStorage();
+          currentResults = null;
+          s3Url = null;
+          presignedUrl = null;
+          uploadBtn.style.display = "inline-block";
+          processBtn.style.display = "none";
+          downloadAllBtn.style.display = "none";
+          clearResultsBtn.style.display = "none";
+          fileInfo.style.display = "none";
+          s3Info.style.display = "none";
+          s3UrlInput.value = "";
+          processS3Btn.style.display = "none";
+          showStatus("All processing results and local data cleared.", "info");
+          resultsSection.style.display = "none"; // Hide results section
         }
       }
     </script>

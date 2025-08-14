@@ -1829,22 +1829,23 @@
           // Download each segment and create a ZIP file
           // Load JSZip from CDN using script tag approach
           let JSZip;
-          if (typeof window.JSZip === 'undefined') {
+          if (typeof window.JSZip === "undefined") {
             // Load JSZip if not already loaded
             await new Promise((resolve, reject) => {
-              const script = document.createElement('script');
-              script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+              const script = document.createElement("script");
+              script.src =
+                "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
               script.onload = () => {
                 JSZip = window.JSZip;
                 resolve();
               };
-              script.onerror = () => reject(new Error('Failed to load JSZip'));
+              script.onerror = () => reject(new Error("Failed to load JSZip"));
               document.head.appendChild(script);
             });
           } else {
             JSZip = window.JSZip;
           }
-          
+
           const zip = new JSZip();
 
           // Create folders for different segment types

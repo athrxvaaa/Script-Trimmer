@@ -1356,22 +1356,28 @@
       function handleS3UrlInput(e) {
         const url = e.target.value.trim();
         console.log("🔍 S3 URL input:", url);
-        
+
         if (url) {
           const isValid = isValidS3Url(url);
           console.log("✅ S3 URL validation result:", isValid);
-          
+
           if (isValid) {
             processS3Btn.style.display = "inline-block";
             s3UrlDisplay.textContent = url;
             s3Info.style.display = "block";
-            showStatus("✅ Valid S3 URL detected! Click 'Process S3 Video' to continue.", "success");
+            showStatus(
+              "✅ Valid S3 URL detected! Click 'Process S3 Video' to continue.",
+              "success"
+            );
           } else {
             // Show button anyway with a warning for testing
             processS3Btn.style.display = "inline-block";
             s3UrlDisplay.textContent = url;
             s3Info.style.display = "block";
-            showStatus("⚠️ URL format not recognized as S3, but you can try processing anyway.", "warning");
+            showStatus(
+              "⚠️ URL format not recognized as S3, but you can try processing anyway.",
+              "warning"
+            );
           }
         } else {
           processS3Btn.style.display = "none";
@@ -1821,10 +1827,25 @@
           );
 
           // Download each segment and create a ZIP file
-          const JSZip = await import(
-            "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"
-          );
-          const zip = new JSZip.default();
+          // Load JSZip from CDN using script tag approach
+          let JSZip;
+          if (typeof window.JSZip === 'undefined') {
+            // Load JSZip if not already loaded
+            await new Promise((resolve, reject) => {
+              const script = document.createElement('script');
+              script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+              script.onload = () => {
+                JSZip = window.JSZip;
+                resolve();
+              };
+              script.onerror = () => reject(new Error('Failed to load JSZip'));
+              document.head.appendChild(script);
+            });
+          } else {
+            JSZip = window.JSZip;
+          }
+          
+          const zip = new JSZip();
 
           // Create folders for different segment types
           const topicFolder = zip.folder("topic_segments");

@@ -1355,25 +1355,55 @@
       // S3 URL input handler
       function handleS3UrlInput(e) {
         const url = e.target.value.trim();
-        if (url && isValidS3Url(url)) {
-          processS3Btn.style.display = "inline-block";
-          s3UrlDisplay.textContent = url;
-          s3Info.style.display = "block";
+        console.log("🔍 S3 URL input:", url);
+        
+        if (url) {
+          const isValid = isValidS3Url(url);
+          console.log("✅ S3 URL validation result:", isValid);
+          
+          if (isValid) {
+            processS3Btn.style.display = "inline-block";
+            s3UrlDisplay.textContent = url;
+            s3Info.style.display = "block";
+            showStatus("✅ Valid S3 URL detected! Click 'Process S3 Video' to continue.", "success");
+          } else {
+            // Show button anyway with a warning for testing
+            processS3Btn.style.display = "inline-block";
+            s3UrlDisplay.textContent = url;
+            s3Info.style.display = "block";
+            showStatus("⚠️ URL format not recognized as S3, but you can try processing anyway.", "warning");
+          }
         } else {
           processS3Btn.style.display = "none";
           s3Info.style.display = "none";
         }
       }
 
-      // Validate S3 URL format
+      // Validate S3 URL format - More flexible validation
       function isValidS3Url(url) {
         try {
           const urlObj = new URL(url);
-          return (
-            urlObj.hostname.includes(".s3.") &&
-            urlObj.hostname.includes(".amazonaws.com")
-          );
+          console.log("🔍 URL hostname:", urlObj.hostname);
+
+          // More flexible validation - check for common S3 patterns
+          const hostname = urlObj.hostname.toLowerCase();
+
+          // Check for various S3 URL patterns
+          const s3Patterns = [
+            /\.s3\./,
+            /\.s3-.*\.amazonaws\.com/,
+            /s3\.amazonaws\.com/,
+            /s3-.*\.amazonaws\.com/,
+            /.*\.s3\.amazonaws\.com/,
+            /.*\.s3-.*\.amazonaws\.com/,
+          ];
+
+          const isValid = s3Patterns.some((pattern) => pattern.test(hostname));
+          console.log("🔍 S3 pattern match result:", isValid);
+
+          return isValid;
         } catch (error) {
+          console.error("❌ URL parsing error:", error);
           return false;
         }
       }

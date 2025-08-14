@@ -52,7 +52,7 @@ Output format:
 ]
 '''
 
-def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en"):
+def transcribe_audio_segments(output_dir=OUTPUT_DIR, language="en", video_type="live"):
     # If transcriptions.json exists, load and return it
     if os.path.exists(TRANSCRIPTIONS_JSON):
         print(f"Loading transcriptions from {TRANSCRIPTIONS_JSON} for faster testing...")
@@ -285,11 +285,15 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 print(f"Failed GPT analysis after {MAX_RETRIES} attempts. Using fallback.")
                 return [{"title": "Unknown", "start": "00:00", "end": f"{max_minutes}:{max_seconds:02d}"}]
 
-def detect_speaker_student_interactions(transcript, chunk_duration):
+def detect_speaker_student_interactions(transcript, chunk_duration, video_type="live"):
     """
     Detect segments where the speaker is directly interacting with students.
     This includes Q&A sessions, student questions, direct addressing, etc.
     """
+    # Skip interaction detection for recorded videos
+    if video_type == "recorded":
+        return []
+    
     max_minutes = int(chunk_duration // 60)
     max_seconds = int(chunk_duration % 60)
     
@@ -406,7 +410,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 print(f"Failed interaction detection after {MAX_RETRIES} attempts.")
                 return []
 
-def create_segment_json(audio_files):
+def create_segment_json(audio_files, video_type="live"):
     segment_json = []
     interaction_segments = []  # Separate list for speaker-student interactions
     prev_topics = []
@@ -446,8 +450,11 @@ def create_segment_json(audio_files):
         # Analyze topics for the entire file with chunk duration constraint
         topics = analyse_topic_gpt(transcript_with_time, prev_topics, chunk_duration)
         
-        # Detect speaker-student interactions
-        interactions = detect_speaker_student_interactions(transcript_with_time, chunk_duration)
+        # Detect speaker-student interactions (only for live sessions)
+        if video_type == "live":
+            interactions = detect_speaker_student_interactions(transcript_with_time, chunk_duration)
+        else:
+            interactions = []  # Skip interaction detection for recorded videos
         
         # Add new topics to the list
         for topic in topics:

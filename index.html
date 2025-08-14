@@ -541,6 +541,99 @@
         font-size: 13px;
       }
 
+      /* Video Type Selection Styles */
+      .video-type-section {
+        padding: 0 40px 24px;
+        border-bottom: 1px solid #f0f0f0;
+      }
+
+      .video-type-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #1a1a1a;
+        margin-bottom: 16px;
+      }
+
+      .video-type-options {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .video-type-option {
+        flex: 1;
+        min-width: 200px;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .video-type-option input[type="radio"] {
+        position: absolute;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .radio-custom {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 100%;
+        background-color: #f9fafb;
+        border: 2px solid #e5e7eb;
+        border-radius: 12px;
+        transition: all 0.2s ease;
+      }
+
+      .video-type-option:hover .radio-custom {
+        border-color: #3b82f6;
+        background-color: #f8fafc;
+      }
+
+      .video-type-option input[type="radio"]:checked ~ .radio-custom {
+        border-color: #3b82f6;
+        background-color: #eff6ff;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+      }
+
+      .option-content {
+        position: relative;
+        z-index: 1;
+        padding: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .option-icon {
+        font-size: 24px;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #3b82f6;
+        border-radius: 8px;
+        color: white;
+      }
+
+      .option-text {
+        flex: 1;
+      }
+
+      .option-title {
+        font-weight: 600;
+        color: #1a1a1a;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .option-description {
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
       /* Video Preview Styles */
       .video-preview-grid {
         display: grid;
@@ -671,6 +764,39 @@
             Upload your video and let our AI automatically segment it into
             meaningful topics
           </p>
+        </div>
+
+        <!-- Video Type Selection -->
+        <div class="video-type-section">
+          <h3 class="video-type-title">Video Type</h3>
+          <div class="video-type-options">
+            <label class="video-type-option">
+              <input type="radio" name="videoType" value="live" checked />
+              <span class="radio-custom"></span>
+              <div class="option-content">
+                <div class="option-icon">🎥</div>
+                <div class="option-text">
+                  <div class="option-title">Live Session</div>
+                  <div class="option-description">
+                    With student interactions and Q&A
+                  </div>
+                </div>
+              </div>
+            </label>
+            <label class="video-type-option">
+              <input type="radio" name="videoType" value="recorded" />
+              <span class="radio-custom"></span>
+              <div class="option-content">
+                <div class="option-icon">📹</div>
+                <div class="option-text">
+                  <div class="option-title">Recorded Video</div>
+                  <div class="option-description">
+                    Topic-based segmentation only
+                  </div>
+                </div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div class="upload-area">
@@ -1125,7 +1251,14 @@
             "🚀 Sending S3 processing request to:",
             PROCESSING_API_URL
           );
-          console.log("📤 Request payload:", { s3_url: s3Url });
+          // Get selected video type
+          const videoType = document.querySelector(
+            'input[name="videoType"]:checked'
+          ).value;
+          console.log("📤 Request payload:", {
+            s3_url: s3Url,
+            video_type: videoType,
+          });
 
           // Start the processing job
           const response = await fetch(PROCESSING_API_URL, {
@@ -1135,6 +1268,7 @@
             },
             body: JSON.stringify({
               s3_url: s3Url,
+              video_type: videoType,
             }),
           });
 
@@ -1180,7 +1314,14 @@
 
         try {
           console.log("🚀 Sending processing request to:", PROCESSING_API_URL);
-          console.log("📤 Request payload:", { s3_url: s3Url });
+          // Get selected video type
+          const videoType = document.querySelector(
+            'input[name="videoType"]:checked'
+          ).value;
+          console.log("📤 Request payload:", {
+            s3_url: s3Url,
+            video_type: videoType,
+          });
 
           // Start the processing job
           const response = await fetch(PROCESSING_API_URL, {
@@ -1190,6 +1331,7 @@
             },
             body: JSON.stringify({
               s3_url: s3Url,
+              video_type: videoType,
             }),
           });
 

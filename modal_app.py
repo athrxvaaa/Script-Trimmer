@@ -109,6 +109,7 @@ class PresignedUrlResponse(BaseModel):
 
 class S3UploadRequest(BaseModel):
     s3_url: str
+    video_type: str = "live"  # Default to live session for backward compatibility
 
 class ProgressUpdateResponse(BaseModel):
     s3_url: str
@@ -1685,7 +1686,7 @@ async def extract_audio_endpoint(request: S3UploadRequest):
             for attempt in range(max_retries):
                 try:
                     # Call the remote function directly without threading
-                    process_video_background.remote(request.s3_url)
+                    process_video_background.remote(request.s3_url, request.video_type)
                     logger.info("✅ Background processing triggered successfully")
                     break  # Success, exit retry loop
                 except Exception as remote_error:
@@ -1783,7 +1784,7 @@ async def progress_stream_endpoint(s3_url: str):
     volumes={"/data": volume},
     secrets=[secret]
 )
-def process_video_background(s3_url: str):
+def process_video_background(s3_url: str, video_type: str = "live"):
     """Background function to process video with real-time progress updates via Modal Queue"""
     try:
         logger.info(f"🚀 Starting background processing for S3 URL: {s3_url}")
@@ -1880,9 +1881,9 @@ def process_video_background(s3_url: str):
         import transcribe_segments
         
         try:
-            audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR))
+            audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR), video_type=video_type)
             logger.info("✅ Transcription completed. Now analyzing topics...")
-            segment_json = transcribe_segments.create_segment_json(audio_files)
+            segment_json = transcribe_segments.create_segment_json(audio_files, video_type)
             with open("segments.json", "w") as f:
                 import json
                 json.dump(segment_json, f, indent=2)

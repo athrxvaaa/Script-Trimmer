@@ -279,8 +279,39 @@
       }
 
       .results-subtitle {
-        color: #6b7280;
-        font-size: 14px;
+        color: #666;
+        margin-bottom: 2rem;
+        text-align: center;
+      }
+
+      .download-all-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin: 0 auto;
+        display: block;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+      }
+
+      .download-all-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+      }
+
+      .download-all-btn:active {
+        transform: translateY(0);
+      }
+
+      .download-all-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
       }
 
       .results-grid {
@@ -897,6 +928,13 @@
           <p class="results-subtitle">
             Your video has been processed and segmented into topics
           </p>
+          <button
+            id="downloadAllBtn"
+            class="download-all-btn"
+            style="display: none"
+          >
+            📦 Download All Segments
+          </button>
         </div>
 
         <div class="results-grid" id="resultsGrid"></div>
@@ -926,6 +964,7 @@
       const uploadBtn = document.getElementById("uploadBtn");
       const processBtn = document.getElementById("processBtn");
       const resultsSection = document.getElementById("resultsSection");
+      const downloadAllBtn = document.getElementById("downloadAllBtn");
 
       // S3 URL elements
       const s3UrlInput = document.getElementById("s3UrlInput");
@@ -941,6 +980,7 @@
       fileInput.addEventListener("change", handleFileSelect);
       uploadBtn.addEventListener("click", handleUpload);
       processBtn.addEventListener("click", handleProcess);
+      downloadAllBtn.addEventListener("click", downloadAllSegments);
 
       // S3 URL event listeners
       s3UrlInput.addEventListener("input", handleS3UrlInput);
@@ -1433,6 +1473,13 @@
         const resultsGrid = document.getElementById("resultsGrid");
         resultsGrid.innerHTML = "";
 
+        // Show download button if segments are available
+        if (data.s3_urls && data.s3_urls.length > 0) {
+          downloadAllBtn.style.display = "block";
+        } else {
+          downloadAllBtn.style.display = "none";
+        }
+
         // Video segments with preview
         if (data.s3_urls && data.s3_urls.length > 0) {
           const videoSegments = data.s3_urls.filter(
@@ -1552,6 +1599,103 @@
             statusDiv.parentNode.removeChild(statusDiv);
           }
         }, 5000);
+      }
+
+      // Download all segments
+      async function downloadAllSegments() {
+        // Get the current results data
+        const resultsGrid = document.getElementById("resultsGrid");
+        if (!resultsGrid.children.length) {
+          showStatus("No segments available to download.", "error");
+          return;
+        }
+
+        downloadAllBtn.disabled = true;
+        downloadAllBtn.innerHTML = '<span class="loading"></span>Preparing download...';
+
+        try {
+          // Get all video elements from the results
+          const videoElements = resultsGrid.querySelectorAll('video source');
+          const segments = [];
+          
+          videoElements.forEach((source, index) => {
+            const videoContainer = source.closest('.video-preview-item');
+            const titleElement = videoContainer.querySelector('h4');
+            const filename = titleElement ? titleElement.textContent.replace('🎬 ', '') : `segment_${index + 1}.mp4`;
+            segments.push({
+              url: source.src,
+              filename: filename
+            });
+          });
+
+          if (segments.length === 0) {
+            throw new Error("No video segments found");
+          }
+
+          showStatus(`📦 Preparing ${segments.length} segments for download...`, "info");
+
+          // Download each segment and create a ZIP file
+          const JSZip = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+          const zip = new JSZip.default();
+
+          // Create folders for different segment types
+          const topicFolder = zip.folder("topic_segments");
+          const interactionFolder = zip.folder("interaction_segments");
+
+          let downloadedCount = 0;
+          const totalSegments = segments.length;
+
+          for (const segment of segments) {
+            try {
+              const response = await fetch(segment.url);
+              if (!response.ok) {
+                console.warn(`Failed to download ${segment.filename}: ${response.statusText}`);
+                continue;
+              }
+              
+              const blob = await response.blob();
+              
+              // Determine folder based on filename
+              if (segment.filename.toLowerCase().includes('interaction')) {
+                interactionFolder.file(segment.filename, blob);
+              } else {
+                topicFolder.file(segment.filename, blob);
+              }
+              
+              downloadedCount++;
+              downloadAllBtn.innerHTML = `<span class="loading"></span>Downloading... (${downloadedCount}/${totalSegments})`;
+              
+            } catch (error) {
+              console.error(`Error downloading ${segment.filename}:`, error);
+            }
+          }
+
+          if (downloadedCount === 0) {
+            throw new Error("Failed to download any segments");
+          }
+
+          // Generate and download the ZIP file
+          downloadAllBtn.innerHTML = '<span class="loading"></span>Creating ZIP file...';
+          const zipBlob = await zip.generateAsync({ type: "blob" });
+          
+          const url = URL.createObjectURL(zipBlob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `video_segments_${new Date().toISOString().slice(0, 10)}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          
+          showStatus(`✅ Successfully downloaded ${downloadedCount} segments!`, "success");
+          
+        } catch (error) {
+          console.error("Download error:", error);
+          showStatus(`Download failed: ${error.message}`, "error");
+        } finally {
+          downloadAllBtn.disabled = false;
+          downloadAllBtn.innerHTML = "📦 Download All Segments";
+        }
       }
     </script>
   </body>

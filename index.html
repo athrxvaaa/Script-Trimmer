@@ -1855,34 +1855,52 @@
           let downloadedCount = 0;
           const totalSegments = segments.length;
 
-          for (const segment of segments) {
+          // Download all segments in parallel for much faster performance
+          downloadAllBtn.innerHTML = `<span class="loading"></span>Starting parallel downloads... (0/${totalSegments})`;
+          
+          const downloadPromises = segments.map(async (segment, index) => {
             try {
               const response = await fetch(segment.url);
               if (!response.ok) {
                 console.warn(
                   `Failed to download ${segment.filename}: ${response.statusText}`
                 );
-                continue;
+                return null;
               }
 
               const blob = await response.blob();
-
-              // Determine folder based on segment type
-              if (segment.segment_type === "interaction") {
-                interactionFolder.file(segment.filename, blob);
-              } else {
-                topicFolder.file(segment.filename, blob);
-              }
-
+              
+              // Update progress counter
               downloadedCount++;
-              downloadAllBtn.innerHTML = `<span class="loading"></span>Downloading... (${downloadedCount}/${totalSegments})`;
+              downloadAllBtn.innerHTML = `<span class="loading"></span>Downloading in parallel... (${downloadedCount}/${totalSegments})`;
+              
+              return {
+                filename: segment.filename,
+                blob: blob,
+                segment_type: segment.segment_type
+              };
             } catch (error) {
               console.error(`Error downloading ${segment.filename}:`, error);
+              return null;
             }
+          });
+
+          // Wait for all downloads to complete
+          const downloadedSegments = await Promise.all(downloadPromises);
+          const successfulDownloads = downloadedSegments.filter(segment => segment !== null);
+
+          if (successfulDownloads.length === 0) {
+            throw new Error("Failed to download any segments");
           }
 
-          if (downloadedCount === 0) {
-            throw new Error("Failed to download any segments");
+          // Add downloaded segments to ZIP
+          downloadAllBtn.innerHTML = `<span class="loading"></span>Adding ${successfulDownloads.length} segments to ZIP...`;
+          for (const segment of successfulDownloads) {
+            if (segment.segment_type === "interaction") {
+              interactionFolder.file(segment.filename, segment.blob);
+            } else {
+              topicFolder.file(segment.filename, segment.blob);
+            }
           }
 
           // Generate and download the ZIP file

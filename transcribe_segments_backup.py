@@ -226,7 +226,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 response = openai.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
+                    max_tokens=256,
                     temperature=0.2
                 )
                 
@@ -351,7 +351,7 @@ Return ONLY the JSON array, no markdown formatting or explanations.
                 response = openai.chat.completions.create(
                     model=GPT_MODEL,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=2048,
+                    max_tokens=256,
                     temperature=0.2
                 )
                 

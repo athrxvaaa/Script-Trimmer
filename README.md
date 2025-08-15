@@ -1,276 +1,225 @@
-# 🎬 Script Trimmer - AI Video Processing Platform
+# 🎬 Lisa - AI Video Processing Platform
 
-A modern, AI-powered video processing platform that automatically segments videos into meaningful chunks using advanced audio analysis and topic detection. Built with FastAPI on Modal with real-time progress tracking.
+**Transform long videos into organized, searchable segments using AI**
+
+Lisa automatically analyzes your videos, extracts meaningful topics, and creates downloadable segments. Perfect for educational content, live sessions, and recorded lectures.
 
 ## 🚀 Live Demo
 
-**Frontend**: https://video-processor-frontend-1dmshdkxm-atharvas-projects-edc46cc8.vercel.app
-
-## 📡 Deployed API Endpoints
-
-### 1. Get Presigned URL Endpoint
-
-**URL**: `https://lu-labs--script-trimmer-boto3-get-presigned-url-endpoint.modal.run`  
-**Method**: `POST`  
-**Purpose**: Generate presigned URLs for direct S3 uploads
-
-**Request Body**:
-
-```json
-{
-  "filename": "video.mp4"
-}
-```
-
-**Response**:
-
-```json
-{
-  "message": "Presigned URL generated successfully",
-  "presigned_url": "https://bucket.s3.region.amazonaws.com/...",
-  "s3_url": "https://bucket.s3.region.amazonaws.com/video.mp4",
-  "s3_key": "uploads/video.mp4",
-  "expires_in": 3600
-}
-```
-
-### 2. Extract Audio Endpoint
-
-**URL**: `https://lu-labs--script-trimmer-boto3-extract-audio-endpoint.modal.run`  
-**Method**: `POST`  
-**Purpose**: Process uploaded videos for audio extraction and segmentation
-
-**Request Body**:
-
-```json
-{
-  "s3_url": "https://bucket.s3.region.amazonaws.com/video.mp4"
-}
-```
-
-**Response**:
-
-```json
-{
-  "s3_url": "https://bucket.s3.region.amazonaws.com/video.mp4",
-  "queue_key": "md5_hash_of_s3_url",
-  "status": "pending",
-  "message": "Video processing job started successfully",
-  "progress": 0.0
-}
-```
-
-### 3. Progress Stream Endpoint
-
-**URL**: `https://lu-labs--script-trimmer-boto3-progress-stream-endpoint.modal.run`  
-**Method**: `GET`  
-**Purpose**: Real-time progress updates via Server-Sent Events (SSE)
-
-**Query Parameters**:
-
-- `s3_url`: URL-encoded S3 URL of the video being processed
-
-**Response**: Server-Sent Events stream with real-time updates
-
-**Example Events**:
-
-```json
-{"type": "connection", "message": "Connected to progress stream", "s3_url": "..."}
-{"s3_url": "...", "status": "running", "message": "Downloading video from S3...", "progress": 15.0, "timestamp": "..."}
-{"s3_url": "...", "status": "running", "message": "Extracting audio...", "progress": 30.0, "timestamp": "..."}
-{"s3_url": "...", "status": "completed", "message": "Video processing completed successfully!", "progress": 100.0, "result": {...}, "timestamp": "..."}
-```
+**Frontend**: https://video-processor-frontend-ijkl54wfg-atharvas-projects-edc46cc8.vercel.app
 
 ## ✨ Features
 
-### 🎥 **Enhanced Video Display**
+### 🎥 **Smart Video Processing**
 
-- **Embedded Video Players** - Videos play directly in the browser
-- **Compact Preview Windows** - Small, clean video players with hover effects
-- **Responsive Grid Layout** - Automatically adapts to screen size
-- **File Size Display** - Shows size in MB for each video segment
-- **Modern UI** - Professional design with rounded corners and smooth animations
+- **Topic-based Segmentation** - AI identifies and segments by topics
+- **Interaction Detection** - Finds Q&A sessions and student interactions
+- **Live vs Recorded** - Different processing for live sessions vs recorded videos
+- **YouTube Support** - Process YouTube videos directly (with optional cookies)
 
-### 🔧 **Backend Improvements**
+### 📁 **Multiple Input Sources**
 
-- **Boto3 Integration** - Native AWS S3 client for reliable uploads
-- **Enhanced Error Handling** - Better error messages and debugging
-- **Improved Logging** - Detailed logs for troubleshooting
-- **S3 Multipart Upload** - Efficient large file handling (50MB chunks)
-- **Real-time Progress** - Modal Queue for live progress updates
+- **File Upload** - Drag & drop video files (up to 10GB)
+- **S3 URLs** - Process videos already in S3
+- **YouTube URLs** - Direct YouTube video processing
+- **Live Streams** - Support for YouTube live streams
 
-### 🎯 **Simplified UI**
+### 🎯 **Smart Organization**
 
-- **Video Segments Only** - Shows only video segments with embedded players
-- **Interaction Segments** - Separate display for interaction segments
-- **No Clutter** - Clean design focused on video content
-- **Drag & Drop Upload** - Intuitive file upload interface
+- **Topic Segments** - Organized by content topics
+- **Interaction Segments** - Q&A and student interaction moments
+- **Download All** - Download all segments as ZIP files
+- **Local Storage** - Results persist for 24 hours
 
 ## 🏗️ Architecture
 
 ### Frontend (Vercel)
 
-- **Framework**: Pure HTML/CSS/JavaScript
-- **Deployment**: Vercel (Static Site)
-- **Features**: Drag & drop upload, progress tracking, video preview
-- **URL**: https://video-processor-frontend-1dmshdkxm-atharvas-projects-edc46cc8.vercel.app
+- **Modern UI** - Clean, responsive design with Lisa branding
+- **Real-time Progress** - Live progress tracking
+- **Video Previews** - Embedded video players
+- **Drag & Drop** - Intuitive file upload
 
 ### Backend (Modal)
 
-- **Framework**: FastAPI on Modal
-- **Processing**: AI-powered video segmentation
-- **Storage**: AWS S3 with presigned URLs
-- **Compute**: Modal's serverless infrastructure
-- **Real-time Updates**: Modal Queue for progress tracking
+- **AI Processing** - GPT-4 for topic analysis and interaction detection
+- **Unified Pipeline** - Same processing for S3 and YouTube videos
+- **Real-time Updates** - Modal Queue for progress tracking
+- **High Performance** - 16GB RAM, 4 CPU cores, 4-hour timeout
 
-## 📋 Prerequisites
+## 📡 API Endpoints
 
-- AWS S3 bucket with proper CORS configuration
-- Modal account with deployed backend
-- Vercel account (for frontend deployment)
+### 1. Get Presigned URL
 
-## 🔧 Setup Instructions
-
-### 1. Backend Deployment (Modal)
-
-```bash
-# Deploy the Modal app
-modal deploy modal_app.py
-
-# Check deployment status
-modal app list
-
-# View logs
-modal app logs <app-id>
+```
+POST https://lu-labs--script-trimmer-get-presigned-url-endpoint.modal.run
 ```
 
-### 2. Frontend Deployment (Vercel)
+Generate S3 upload URLs for direct file uploads.
+
+### 2. Process Video
+
+```
+POST https://lu-labs--script-trimmer-extract-audio-endpoint.modal.run
+```
+
+Process videos from S3 URLs or YouTube URLs.
+
+### 3. Progress Stream
+
+```
+GET https://lu-labs--script-trimmer-progress-stream-endpoint.modal.run
+```
+
+Real-time progress updates via Server-Sent Events.
+
+## 🎯 How to Use
+
+### Step 1: Choose Your Input
+
+- **Upload File**: Drag & drop a video file
+- **S3 URL**: Paste an S3 video URL
+- **YouTube URL**: Paste a YouTube video URL
+
+### Step 2: Select Video Type
+
+- **Live Session**: Includes topic segments + interaction segments
+- **Recorded Video**: Topic segments only
+
+### Step 3: Process
+
+- Click "Process Video"
+- Watch real-time progress
+- View results with video previews
+- Download all segments as ZIP
+
+## 🔧 Recent Updates
+
+### ✅ **YouTube Integration**
+
+- Direct YouTube video processing
+- Support for live streams and regular videos
+- Optional cookies for age-restricted content
+- Unified pipeline (same processing as S3 videos)
+
+### ✅ **Enhanced AI Processing**
+
+- Increased max_tokens to 2048 (prevents truncated responses)
+- Better JSON parsing and error handling
+- Improved topic and interaction detection
+- 2-minute timeout with retry logic
+
+### ✅ **Improved UI**
+
+- Modern drag & drop interface
+- URL type detection (S3 vs YouTube)
+- Optional cookies input for YouTube
+- Better progress tracking and error messages
+
+### ✅ **Unified Pipeline**
+
+- Single processing function for all video types
+- Consistent chunking and segmentation
+- Same quality for S3 and YouTube videos
+- Simplified maintenance
+
+## 🚀 Quick Start
+
+1. **Visit**: https://video-processor-frontend-ijkl54wfg-atharvas-projects-edc46cc8.vercel.app
+2. **Upload** a video file or paste a YouTube/S3 URL
+3. **Select** video type (Live Session or Recorded Video)
+4. **Process** and wait for AI analysis
+5. **Download** organized video segments
+
+## 📊 Processing Pipeline
+
+```
+Video Input (File/S3/YouTube)
+    ↓
+Download & Audio Extraction
+    ↓
+AI Transcription (Whisper)
+    ↓
+Topic Analysis (GPT-4)
+    ↓
+Interaction Detection (GPT-4) [Live sessions only]
+    ↓
+Video Segmentation (FFmpeg)
+    ↓
+S3 Upload & Results
+```
+
+## 🔧 Technical Details
+
+### Supported Formats
+
+- **Video**: MP4, AVI, MOV, MKV, WebM, FLV, WMV
+- **Audio**: MP3 (extracted from video)
+- **Size**: Up to 10GB per file
+
+### AI Models
+
+- **Transcription**: OpenAI Whisper API
+- **Topic Analysis**: GPT-4 (gpt-4o-mini)
+- **Interaction Detection**: GPT-4 (gpt-4o-mini)
+
+### Performance
+
+- **Processing Time**: 2-10 minutes (depends on video length)
+- **Chunking**: 10-minute audio chunks for large files
+- **Timeout**: 2 minutes per AI call with retry logic
+- **Max Tokens**: 2048 for complete responses
+
+## 🛠️ Development
+
+### Backend Deployment
 
 ```bash
-# Install Vercel CLI
-npm i -g vercel
+modal deploy modal_app.py
+```
 
-# Login to Vercel
-vercel login
+### Frontend Deployment
 
-# Deploy to production
+```bash
 vercel --prod
 ```
 
-### 3. Environment Configuration
-
-#### Modal Secrets
+### Environment Setup
 
 ```bash
-# Create Modal secrets for AWS credentials
-modal secret create script-trimmer-secrets \
-  --data '{
-    "S3_ACCESS_KEY": "your-access-key",
-    "S3_SECRET_KEY": "your-secret-key",
-    "S3_BUCKET_NAME": "your-bucket-name",
-    "S3_REGION": "ap-south-1"
-  }'
+# Modal secrets for AWS and OpenAI
+modal secret create script-trimmer-secrets
+modal secret create youtube-cookies
 ```
-
-#### S3 CORS Configuration
-
-Apply the CORS configuration in `cors-config.json` to your S3 bucket:
-
-```json
-{
-  "CORSRules": [
-    {
-      "AllowedHeaders": ["*"],
-      "AllowedMethods": ["GET", "PUT", "POST", "DELETE"],
-      "AllowedOrigins": ["*"],
-      "ExposeHeaders": ["ETag"]
-    }
-  ]
-}
-```
-
-## 🎯 Usage Guide
-
-### Step 1: Upload Video
-
-1. **Select File**: Click the upload area or drag & drop a video file
-2. **File Validation**: The app validates file type and size (max 10GB)
-3. **Upload to S3**: Click "Upload to S3" to start the upload process
-4. **Progress Tracking**: Watch the real-time progress bar
-5. **Confirmation**: See upload status and video information
-
-### Step 2: Process Video
-
-1. **Process Button**: After successful upload, click "Process Video"
-2. **Processing**: The app calls your Modal backend for video analysis
-3. **Real-time Progress**: Watch live progress updates via SSE
-4. **Results**: View processing results including:
-   - Audio extraction details
-   - Video segments with embedded players
-   - S3 file URLs
-   - Processing time
 
 ## 📁 Project Structure
 
 ```
-├── modal_app.py              # Main Modal FastAPI application
+├── modal_app.py              # Main Modal FastAPI app
 ├── index.html               # Frontend application
-├── transcribe_segments.py   # Audio transcription module
-├── extract_video_segments.py # Video segmentation module
-├── requirements_modal.txt   # Modal dependencies
-├── cors-config.json        # S3 CORS configuration
-├── vercel.json            # Vercel deployment config
-└── README.md              # This file
+├── transcribe_segments.py   # AI transcription & analysis
+├── extract_video_segments.py # Video segmentation
+├── requirements_modal.txt   # Dependencies
+└── README.md               # This file
 ```
 
-## 🔧 Configuration
+## 🎯 Use Cases
 
-### Modal App Configuration
+- **Educational Content**: Segment lectures by topics
+- **Live Sessions**: Extract Q&A and interaction moments
+- **Training Videos**: Organize content by subject
+- **YouTube Content**: Process YouTube videos directly
+- **Research**: Analyze video content structure
 
-- **CPU**: 4.0 cores for heavy video processing
-- **Memory**: 16GB RAM for large file handling
-- **Timeout**: 4 hours for very large file processing
-- **Storage**: Modal Volume for persistent data
-- **Queue**: Modal Queue for real-time progress updates
+## 🔒 Security & Privacy
 
-### S3 Configuration
-
-- **Bucket**: Configured via environment variables
-- **Region**: ap-south-1 (configurable)
-- **Multipart Upload**: 50MB chunks for large files
-- **CORS**: Configured for cross-origin requests
-
-## 🚀 Performance Features
-
-- **Large File Support**: Up to 10GB video files
-- **Multipart Uploads**: Efficient S3 uploads for large files
-- **Real-time Progress**: Live updates via Modal Queue
-- **Background Processing**: Non-blocking video analysis
-- **Error Recovery**: Robust error handling and retry logic
-
-## 📊 Monitoring
-
-- **Modal Logs**: View processing logs with `modal app logs`
-- **S3 Monitoring**: Track upload/download progress
-- **Queue Monitoring**: Real-time progress updates
-- **Error Tracking**: Comprehensive error logging
-
-## 🔒 Security
-
-- **Presigned URLs**: Secure, time-limited S3 access
-- **Environment Variables**: Sensitive data stored in Modal secrets
-- **CORS Configuration**: Proper cross-origin request handling
-- **Input Validation**: File type and size validation
-
-## 📈 Scalability
-
-- **Serverless**: Modal's auto-scaling infrastructure
-- **Queue-based**: Handles multiple concurrent requests
-- **S3 Integration**: Scalable cloud storage
-- **Background Processing**: Non-blocking operations
+- **No Data Storage**: Videos processed and deleted
+- **Secure Uploads**: Presigned S3 URLs
+- **API Keys**: Stored in Modal secrets
+- **CORS**: Proper cross-origin configuration
 
 ---
 
-**Deployment Branch**: `deployment`  
+**Built with**: FastAPI, Modal, OpenAI, AWS S3, Vercel  
 **Last Updated**: December 2024  
-**Version**: 1.0.0
+**Version**: 2.0.0

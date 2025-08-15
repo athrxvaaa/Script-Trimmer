@@ -537,7 +537,7 @@
         font-weight: 500;
       }
 
-      /* S3 URL Input Styles */
+      /* URL Input Styles */
       .upload-section {
         margin: 24px 0;
         padding: 0 40px;
@@ -550,7 +550,7 @@
         font-weight: 600;
       }
 
-      .s3-input-container {
+      .url-input-container {
         display: flex;
         gap: 12px;
         align-items: center;
@@ -558,7 +558,7 @@
         flex-wrap: wrap;
       }
 
-      .s3-url-input {
+      .url-input {
         flex: 1;
         min-width: 300px;
         padding: 12px 16px;
@@ -568,32 +568,103 @@
         transition: border-color 0.2s ease;
       }
 
-      .s3-url-input:focus {
+      .url-input:focus {
         outline: none;
         border-color: #3b82f6;
         box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
       }
 
-      .s3-info {
+      .url-info {
         background: #eff6ff;
         padding: 16px;
         border-radius: 8px;
         border: 1px solid #dbeafe;
       }
 
-      .s3-info h4 {
+      .url-info h4 {
         color: #1e40af;
         margin-bottom: 8px;
         font-size: 14px;
         font-weight: 600;
       }
 
-      .s3-info p {
+      .url-info p {
         color: #1e40af;
         font-family: monospace;
         word-break: break-all;
         margin: 0;
         font-size: 13px;
+      }
+
+      .url-type-indicator {
+        margin-top: 8px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .url-type-indicator.youtube {
+        background: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+      }
+
+      .url-type-indicator.s3 {
+        background: #f0f9ff;
+        color: #0369a1;
+        border: 1px solid #bae6fd;
+      }
+
+      /* Cookies Section Styles */
+      .cookies-section {
+        background: #fefce8;
+        border: 1px solid #fde047;
+        border-radius: 8px;
+        padding: 16px;
+        margin-top: 16px;
+      }
+
+      .cookies-section h4 {
+        color: #92400e;
+        margin-bottom: 8px;
+        font-size: 14px;
+      }
+
+      .cookies-help {
+        color: #a16207;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+
+      .cookies-textarea {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #fbbf24;
+        border-radius: 6px;
+        font-size: 13px;
+        font-family: monospace;
+        resize: vertical;
+        background: #fefdf8;
+      }
+
+      .cookies-textarea:focus {
+        outline: none;
+        border-color: #f59e0b;
+      }
+
+      .cookies-help-links {
+        margin-top: 8px;
+      }
+
+      .cookies-help-links a {
+        color: #d97706;
+        text-decoration: none;
+        font-size: 12px;
+      }
+
+      .cookies-help-links a:hover {
+        text-decoration: underline;
       }
 
       /* Video Type Selection Styles */
@@ -912,23 +983,48 @@
           </div>
         </div>
 
-        <!-- S3 URL Input Section -->
+        <!-- URL Input Section (S3 or YouTube) -->
         <div class="upload-section">
-          <h3>🌐 Or Enter S3 URL</h3>
-          <div class="s3-input-container">
+          <h3>🌐 Or Enter Video URL</h3>
+          <div class="url-input-container">
             <input
               type="url"
-              id="s3UrlInput"
-              placeholder="https://your-bucket.s3.region.amazonaws.com/video.mp4"
-              class="s3-url-input"
+              id="urlInput"
+              placeholder="https://your-bucket.s3.region.amazonaws.com/video.mp4 or https://youtube.com/watch?v=..."
+              class="url-input"
             />
-            <button class="btn" id="processS3Btn" style="display: none">
-              🚀 Process S3 Video
+            <button class="btn" id="processUrlBtn" style="display: none">
+              🚀 Process Video
             </button>
           </div>
-          <div class="s3-info" id="s3Info" style="display: none">
-            <h4>📋 S3 URL:</h4>
-            <p id="s3UrlDisplay"></p>
+          <div class="url-info" id="urlInfo" style="display: none">
+            <h4>📋 Video URL:</h4>
+            <p id="urlDisplay"></p>
+            <div class="url-type-indicator" id="urlTypeIndicator"></div>
+          </div>
+
+          <!-- YouTube Cookies Section (Optional) -->
+          <div
+            class="cookies-section"
+            id="cookiesSection"
+            style="display: none"
+          >
+            <h4>🍪 YouTube Cookies (Optional)</h4>
+            <p class="cookies-help">
+              Add your YouTube cookies for better success rate with
+              age-restricted videos
+            </p>
+            <textarea
+              id="cookiesInput"
+              placeholder="Paste your YouTube cookies here (optional)..."
+              class="cookies-textarea"
+              rows="4"
+            ></textarea>
+            <div class="cookies-help-links">
+              <a href="#" onclick="showCookiesHelp()"
+                >📖 How to get YouTube cookies?</a
+              >
+            </div>
           </div>
         </div>
 
@@ -1006,11 +1102,14 @@
       const downloadAllBtn = document.getElementById("downloadAllBtn");
       const clearResultsBtn = document.getElementById("clearResultsBtn");
 
-      // S3 URL elements
-      const s3UrlInput = document.getElementById("s3UrlInput");
-      const processS3Btn = document.getElementById("processS3Btn");
-      const s3Info = document.getElementById("s3Info");
-      const s3UrlDisplay = document.getElementById("s3UrlDisplay");
+      // URL elements
+      const urlInput = document.getElementById("urlInput");
+      const processUrlBtn = document.getElementById("processUrlBtn");
+      const urlInfo = document.getElementById("urlInfo");
+      const urlDisplay = document.getElementById("urlDisplay");
+      const urlTypeIndicator = document.getElementById("urlTypeIndicator");
+      const cookiesSection = document.getElementById("cookiesSection");
+      const cookiesInput = document.getElementById("cookiesInput");
 
       // Event listeners
       uploadArea.addEventListener("click", () => fileInput.click());
@@ -1023,9 +1122,9 @@
       downloadAllBtn.addEventListener("click", downloadAllSegments);
       clearResultsBtn.addEventListener("click", clearResults);
 
-      // S3 URL event listeners
-      s3UrlInput.addEventListener("input", handleS3UrlInput);
-      processS3Btn.addEventListener("click", handleS3Process);
+      // URL event listeners
+      urlInput.addEventListener("input", handleUrlInput);
+      processUrlBtn.addEventListener("click", handleProcessUrl);
 
       // Local storage functions
       function saveToLocalStorage(data, s3Url) {
@@ -1060,9 +1159,9 @@
               currentResults = data.results;
               s3Url = data.s3_url;
 
-              // Update S3 URL input if it exists
-              if (s3UrlInput && s3Url) {
-                s3UrlInput.value = s3Url;
+              // Update URL input if it exists
+              if (urlInput && s3Url) {
+                urlInput.value = s3Url;
               }
 
               // Display restored results
@@ -1352,49 +1451,82 @@
         });
       }
 
-      // S3 URL input handler
-      function handleS3UrlInput(e) {
+      // URL input handler
+      function handleUrlInput(e) {
         const url = e.target.value.trim();
-        console.log("🔍 S3 URL input:", url);
+        console.log("🔍 URL input:", url);
 
         if (url) {
-          const isValid = isValidS3Url(url);
-          console.log("✅ S3 URL validation result:", isValid);
+          const urlType = getUrlType(url);
+          console.log("✅ URL type detected:", urlType);
 
-          if (isValid) {
-            processS3Btn.style.display = "inline-block";
-            s3UrlDisplay.textContent = url;
-            s3Info.style.display = "block";
-            showStatus(
-              "✅ Valid S3 URL detected! Click 'Process S3 Video' to continue.",
-              "success"
-            );
+          if (urlType) {
+            processUrlBtn.style.display = "inline-block";
+            urlDisplay.textContent = url;
+            urlInfo.style.display = "block";
+
+            // Show URL type indicator
+            urlTypeIndicator.textContent =
+              urlType === "youtube" ? "🎬 YouTube Video" : "☁️ S3 Video";
+            urlTypeIndicator.className = `url-type-indicator ${urlType}`;
+
+            // Show/hide cookies section for YouTube
+            if (urlType === "youtube") {
+              cookiesSection.style.display = "block";
+              showStatus(
+                "✅ YouTube URL detected! Add optional cookies for better success rate.",
+                "success"
+              );
+            } else {
+              cookiesSection.style.display = "none";
+              showStatus(
+                "✅ S3 URL detected! Click 'Process Video' to continue.",
+                "success"
+              );
+            }
           } else {
             // Show button anyway with a warning for testing
-            processS3Btn.style.display = "inline-block";
-            s3UrlDisplay.textContent = url;
-            s3Info.style.display = "block";
+            processUrlBtn.style.display = "inline-block";
+            urlDisplay.textContent = url;
+            urlInfo.style.display = "block";
+            urlTypeIndicator.textContent = "❓ Unknown URL Type";
+            urlTypeIndicator.className = "url-type-indicator";
+            cookiesSection.style.display = "none";
             showStatus(
-              "⚠️ URL format not recognized as S3, but you can try processing anyway.",
+              "⚠️ URL format not recognized, but you can try processing anyway.",
               "warning"
             );
           }
         } else {
-          processS3Btn.style.display = "none";
-          s3Info.style.display = "none";
+          processUrlBtn.style.display = "none";
+          urlInfo.style.display = "none";
+          cookiesSection.style.display = "none";
         }
       }
 
-      // Validate S3 URL format - More flexible validation
-      function isValidS3Url(url) {
+      // Detect URL type (S3 or YouTube)
+      function getUrlType(url) {
         try {
           const urlObj = new URL(url);
           console.log("🔍 URL hostname:", urlObj.hostname);
 
-          // More flexible validation - check for common S3 patterns
           const hostname = urlObj.hostname.toLowerCase();
 
-          // Check for various S3 URL patterns
+          // Check for YouTube patterns
+          const youtubePatterns = [
+            /youtube\.com/,
+            /youtu\.be/,
+            /youtube-nocookie\.com/,
+            /youtube\.com\/live/,
+            /youtube\.com\/watch/,
+            /youtube\.com\/embed/,
+          ];
+
+          if (youtubePatterns.some((pattern) => pattern.test(hostname))) {
+            return "youtube";
+          }
+
+          // Check for S3 patterns
           const s3Patterns = [
             /\.s3\./,
             /\.s3-.*\.amazonaws\.com/,
@@ -1404,44 +1536,46 @@
             /.*\.s3-.*\.amazonaws\.com/,
           ];
 
-          const isValid = s3Patterns.some((pattern) => pattern.test(hostname));
-          console.log("🔍 S3 pattern match result:", isValid);
+          if (s3Patterns.some((pattern) => pattern.test(hostname))) {
+            return "s3";
+          }
 
-          return isValid;
+          return null;
         } catch (error) {
           console.error("❌ URL parsing error:", error);
-          return false;
+          return null;
         }
       }
 
-      // Process S3 URL directly
-      async function handleS3Process() {
-        const s3Url = s3UrlInput.value.trim();
+      // Process URL directly (S3 or YouTube)
+      async function handleProcessUrl() {
+        const url = urlInput.value.trim();
+        const cookiesContent = cookiesInput.value.trim();
 
-        if (!s3Url) {
-          showStatus("Please enter a valid S3 URL.", "error");
+        if (!url) {
+          showStatus("Please enter a valid URL.", "error");
           return;
         }
 
-        if (!isValidS3Url(s3Url)) {
-          showStatus("Please enter a valid S3 URL format.", "error");
+        const urlType = getUrlType(url);
+        if (!urlType) {
+          showStatus("Please enter a valid S3 or YouTube URL.", "error");
           return;
         }
 
-        processS3Btn.disabled = true;
-        processS3Btn.innerHTML =
-          '<span class="loading"></span>Processing S3 video...';
+        processUrlBtn.disabled = true;
+        processUrlBtn.innerHTML = `<span class="loading"></span>Processing ${urlType} video...`;
 
         // Show progress section
         progressSection.style.display = "block";
         updateProgress(
           0,
-          "Starting S3 video processing with real-time updates..."
+          `Starting ${urlType} video processing with real-time updates...`
         );
 
         try {
           console.log(
-            "🚀 Sending S3 processing request to:",
+            "🚀 Sending video processing request to:",
             PROCESSING_API_URL
           );
           // Get selected video type
@@ -1449,8 +1583,9 @@
             'input[name="videoType"]:checked'
           ).value;
           console.log("📤 Request payload:", {
-            s3_url: s3Url,
+            s3_url: url,
             video_type: videoType,
+            cookies_content: cookiesContent || undefined,
           });
 
           // Start the processing job
@@ -1460,8 +1595,9 @@
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              s3_url: s3Url,
+              s3_url: url,
               video_type: videoType,
+              cookies_content: cookiesContent || undefined,
             }),
           });
 
@@ -1470,10 +1606,13 @@
           console.log("📊 Processing response data:", data);
 
           if (response.ok) {
-            showStatus("✅ S3 processing job started successfully!", "success");
+            showStatus(
+              `✅ ${urlType} processing job started successfully!`,
+              "success"
+            );
 
             // Start real-time progress streaming
-            startProgressStream(s3Url);
+            startProgressStream(url);
           } else {
             console.error("❌ Processing failed with status:", response.status);
             console.error("❌ Error details:", data);
@@ -1482,8 +1621,8 @@
         } catch (error) {
           console.error("❌ Processing error:", error);
           showStatus(`Processing failed: ${error.message}`, "error");
-          processS3Btn.disabled = false;
-          processS3Btn.innerHTML = "🚀 Process S3 Video";
+          processUrlBtn.disabled = false;
+          processUrlBtn.innerHTML = "🚀 Process Video";
         }
       }
 
@@ -1620,8 +1759,8 @@
                 eventSource.close();
                 processBtn.disabled = false;
                 processBtn.innerHTML = "⚙️ Process Video";
-                processS3Btn.disabled = false;
-                processS3Btn.innerHTML = "🚀 Process S3 Video";
+                processUrlBtn.disabled = false;
+                processUrlBtn.innerHTML = "🚀 Process Video";
               } else if (data.status === "failed") {
                 updateProgress(0, "Processing failed");
                 showStatus(
@@ -1631,8 +1770,8 @@
                 eventSource.close();
                 processBtn.disabled = false;
                 processBtn.innerHTML = "⚙️ Process Video";
-                processS3Btn.disabled = false;
-                processS3Btn.innerHTML = "🚀 Process S3 Video";
+                processUrlBtn.disabled = false;
+                processUrlBtn.innerHTML = "🚀 Process Video";
               }
             }
           } catch (error) {
@@ -1646,8 +1785,8 @@
           eventSource.close();
           processBtn.disabled = false;
           processBtn.innerHTML = "⚙️ Process Video";
-          processS3Btn.disabled = false;
-          processS3Btn.innerHTML = "🚀 Process S3 Video";
+          processUrlBtn.disabled = false;
+          processUrlBtn.innerHTML = "🚀 Process Video";
         };
       }
 
@@ -1857,7 +1996,7 @@
 
           // Download all segments in parallel for much faster performance
           downloadAllBtn.innerHTML = `<span class="loading"></span>Starting parallel downloads... (0/${totalSegments})`;
-          
+
           const downloadPromises = segments.map(async (segment, index) => {
             try {
               const response = await fetch(segment.url);
@@ -1869,15 +2008,15 @@
               }
 
               const blob = await response.blob();
-              
+
               // Update progress counter
               downloadedCount++;
               downloadAllBtn.innerHTML = `<span class="loading"></span>Downloading in parallel... (${downloadedCount}/${totalSegments})`;
-              
+
               return {
                 filename: segment.filename,
                 blob: blob,
-                segment_type: segment.segment_type
+                segment_type: segment.segment_type,
               };
             } catch (error) {
               console.error(`Error downloading ${segment.filename}:`, error);
@@ -1887,7 +2026,9 @@
 
           // Wait for all downloads to complete
           const downloadedSegments = await Promise.all(downloadPromises);
-          const successfulDownloads = downloadedSegments.filter(segment => segment !== null);
+          const successfulDownloads = downloadedSegments.filter(
+            (segment) => segment !== null
+          );
 
           if (successfulDownloads.length === 0) {
             throw new Error("Failed to download any segments");
@@ -1948,12 +2089,34 @@
           downloadAllBtn.style.display = "none";
           clearResultsBtn.style.display = "none";
           fileInfo.style.display = "none";
-          s3Info.style.display = "none";
-          s3UrlInput.value = "";
-          processS3Btn.style.display = "none";
+          urlInfo.style.display = "none";
+          urlInput.value = "";
+          processUrlBtn.style.display = "none";
+          cookiesSection.style.display = "none";
+          cookiesInput.value = "";
           showStatus("All processing results and local data cleared.", "info");
           resultsSection.style.display = "none"; // Hide results section
         }
+      }
+
+      // Show cookies help
+      function showCookiesHelp() {
+        const helpText = `
+🍪 How to Get YouTube Cookies:
+
+1. Install a browser extension:
+   • Chrome: "Get cookies.txt" extension
+   • Firefox: "cookies.txt" extension
+
+2. Go to YouTube and log in
+
+3. Click the extension icon and export cookies
+
+4. Copy the cookies content and paste it here
+
+This helps with age-restricted videos and better success rates!
+        `;
+        alert(helpText);
       }
     </script>
   </body>

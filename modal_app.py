@@ -60,6 +60,9 @@ volume = modal.Volume.from_name("script-trimmer-storage", create_if_missing=True
 # Create a secret for API keys
 secret = modal.Secret.from_name("script-trimmer-secrets")
 
+# Create a secret for YouTube cookies (optional)
+youtube_cookies_secret = modal.Secret.from_name("youtube-cookies")
+
 # Configuration
 UPLOAD_DIR = Path("/data/uploads")
 OUTPUT_DIR = Path("/data/output")
@@ -110,6 +113,9 @@ class PresignedUrlResponse(BaseModel):
 class S3UploadRequest(BaseModel):
     s3_url: str
     video_type: str = "live"  # Default to live session for backward compatibility
+    cookies_content: Optional[str] = None  # Optional cookies for YouTube URLs
+
+
 
 class ProgressUpdateResponse(BaseModel):
     s3_url: str
@@ -120,25 +126,6 @@ class ProgressUpdateResponse(BaseModel):
     error: Optional[str] = None
     timestamp: str
 
-
-
-class YouTubeProcessRequest(BaseModel):
-    youtube_url: str
-
-class YouTubeProcessResponse(BaseModel):
-    message: str
-    youtube_url: str
-    audio_file_path: Optional[str] = None
-    chunk_files: Optional[List[str]] = None
-    total_chunks: Optional[int] = None
-    video_segments: Optional[List[str]] = None
-    total_video_segments: Optional[int] = None
-    interaction_segments: Optional[List[str]] = None
-    total_interaction_segments: Optional[int] = None
-    segments_json_path: Optional[str] = None
-    s3_urls: Optional[List[dict]] = None
-    processing_time_seconds: float
-    video_upload_info: Optional[dict] = None
 
 # Helper functions
 def get_file_size_mb(file_path: Path) -> float:
@@ -786,6 +773,84 @@ def run_video_segment_extraction(video_path: Path) -> List[str]:
     except Exception as e:
         logger.error(f"❌ Error during video segment extraction: {str(e)}")
         return []
+
+def download_youtube_video(youtube_url: str, output_dir: Path, cookies_content: Optional[str] = None) -> Optional[Path]:
+    """Download video from YouTube URL using yt-dlp and return the file path"""
+    try:
+        logger.info(f"📥 Starting YouTube video download: {youtube_url}")
+        
+        # Handle cookies
+        cookies_file = None
+        if cookies_content:
+            logger.info("🔐 Using user-provided cookies")
+            cookies_file = Path("/tmp/youtube_cookies.txt")
+            with open(cookies_file, 'w') as f:
+                f.write(cookies_content)
+        elif os.getenv("YOUTUBE_COOKIES"):
+            logger.info("🔐 Using Modal secret cookies")
+            cookies_file = Path("/tmp/youtube_cookies.txt")
+            with open(cookies_file, 'w') as f:
+                f.write(os.getenv("YOUTUBE_COOKIES"))
+        
+        # Get video info first
+        ydl_opts_info = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+        }
+        if cookies_file and cookies_file.exists():
+            ydl_opts_info['cookiefile'] = str(cookies_file)
+        
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            video_info = ydl.extract_info(youtube_url, download=False)
+        
+        if not video_info:
+            raise Exception("Failed to get YouTube video information")
+        
+        # Create filename
+        video_title = video_info.get('title', 'youtube_video')
+        safe_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_title = safe_title.replace(' ', '_')[:50]
+        
+        # Generate unique filename
+        file_id = str(uuid.uuid4())
+        video_filename = f"{file_id}_{safe_title}.mp4"
+        video_path = output_dir / video_filename
+        
+        # Download options
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': str(video_path),
+            'quiet': True,
+            'no_warnings': True,
+        }
+        if cookies_file and cookies_file.exists():
+            ydl_opts['cookiefile'] = str(cookies_file)
+        
+        # Download the video
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+        
+        # Verify file was downloaded
+        if not video_path.exists():
+            raise Exception("Video file not found after download")
+        
+        # Get downloaded file size
+        file_size_mb = get_file_size_mb(video_path)
+        logger.info(f"✅ YouTube video downloaded successfully: {video_path.name} ({file_size_mb:.2f}MB)")
+        
+        # Clean up cookies file
+        if cookies_file and cookies_file.exists():
+            cookies_file.unlink()
+        
+        return video_path
+        
+    except Exception as e:
+        logger.error(f"❌ Error downloading YouTube video: {str(e)}")
+        # Clean up cookies file on error
+        if cookies_file and cookies_file.exists():
+            cookies_file.unlink()
+        return None
 
 def download_video_from_s3(s3_url: str, output_dir: Path) -> Optional[Path]:
     """Download video from S3 URL using boto3 and return the file path"""
@@ -1685,9 +1750,17 @@ async def extract_audio_endpoint(request: S3UploadRequest):
         def start_background_processing():
             for attempt in range(max_retries):
                 try:
-                    # Call the remote function directly without threading
-                    process_video_background.remote(request.s3_url, request.video_type)
-                    logger.info("✅ Background processing triggered successfully")
+                    # Check if it's a YouTube URL or S3 URL
+                    if is_youtube_url(request.s3_url):
+                        logger.info(f"🎬 Detected YouTube URL: {request.s3_url}")
+                        # Download YouTube video and process through S3 pipeline
+                        process_video_background.remote(request.s3_url, request.video_type, request.cookies_content)
+                        logger.info("✅ YouTube download and S3 processing triggered successfully")
+                    else:
+                        logger.info(f"☁️  Detected S3 URL: {request.s3_url}")
+                        # Call S3 processing function
+                        process_video_background.remote(request.s3_url, request.video_type)
+                        logger.info("✅ S3 background processing triggered successfully")
                     break  # Success, exit retry loop
                 except Exception as remote_error:
                     logger.error(f"❌ Remote function call failed (attempt {attempt + 1}/{max_retries}): {str(remote_error)}")
@@ -1784,7 +1857,7 @@ async def progress_stream_endpoint(s3_url: str):
     volumes={"/data": volume},
     secrets=[secret]
 )
-def process_video_background(s3_url: str, video_type: str = "live"):
+def process_video_background(s3_url: str, video_type: str = "live", cookies_content: Optional[str] = None):
     """Background function to process video with real-time progress updates via Modal Queue"""
     try:
         logger.info(f"🚀 Starting background processing for S3 URL: {s3_url}")
@@ -1826,12 +1899,19 @@ def process_video_background(s3_url: str, video_type: str = "live"):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
         
-        send_progress_update(s3_url, "running", "Downloading video from S3...", 15.0)
-        
-        # Download video from S3
-        video_path = download_video_from_s3(s3_url, UPLOAD_DIR)
-        if not video_path:
-            raise Exception("Failed to download video from S3")
+        # Check if it's a YouTube URL or S3 URL
+        if is_youtube_url(s3_url):
+            send_progress_update(s3_url, "running", "Downloading YouTube video...", 15.0)
+            # Download YouTube video
+            video_path = download_youtube_video(s3_url, UPLOAD_DIR, cookies_content)
+            if not video_path:
+                raise Exception("Failed to download YouTube video")
+        else:
+            send_progress_update(s3_url, "running", "Downloading video from S3...", 15.0)
+            # Download video from S3
+            video_path = download_video_from_s3(s3_url, UPLOAD_DIR)
+            if not video_path:
+                raise Exception("Failed to download video from S3")
         
         send_progress_update(s3_url, "running", "Extracting audio...", 30.0)
         
@@ -2024,6 +2104,23 @@ def hash_s3_url(s3_url: str) -> str:
     """Hash S3 URL to use as queue key"""
     return hashlib.md5(s3_url.encode()).hexdigest()
 
+def is_youtube_url(url: str) -> bool:
+    """Check if the URL is a YouTube URL"""
+    youtube_patterns = [
+        r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/embed/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtu\.be/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/v/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/live/[\w-]+',
+        r'(?:https?://)?(?:www\.)?youtube\.com/shorts/[\w-]+'
+    ]
+    
+    import re
+    for pattern in youtube_patterns:
+        if re.match(pattern, url):
+            return True
+    return False
+
 # Progress update function
 def send_progress_update(s3_url: str, status: str, message: str, progress: float = None, result: dict = None, error: str = None):
     """Send progress update to Modal Queue"""
@@ -2047,3 +2144,196 @@ def send_progress_update(s3_url: str, status: str, message: str, progress: float
     except Exception as e:
         logger.error(f"❌ Failed to send progress update: {str(e)}")
 
+
+@app.function(
+    image=image,
+    cpu=4.0,  # 4 CPU cores for heavy video processing
+    memory=16384,  # 16GB RAM for large file handling
+    timeout=14400,  # 4 hours timeout for very large file processing
+    volumes={"/data": volume},
+    secrets=[secret, youtube_cookies_secret]
+)
+def process_youtube_background(youtube_url: str, video_type: str = "live", cookies_content: Optional[str] = None):
+    """Background function to process YouTube video with real-time progress updates via Modal Queue"""
+    try:
+        logger.info(f"🚀 Starting YouTube processing for URL: {youtube_url}")
+        
+        # Send initial progress update
+        send_progress_update(youtube_url, "running", "Starting YouTube video processing...", 5.0)
+        
+        # Create directories
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        VIDEO_SEGMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Handle cookies
+        cookies_file = None
+        if cookies_content:
+            logger.info("🔐 Using user-provided cookies")
+            cookies_file = Path("/tmp/youtube_cookies.txt")
+            with open(cookies_file, 'w') as f:
+                f.write(cookies_content)
+        elif os.getenv("YOUTUBE_COOKIES"):
+            logger.info("🔐 Using Modal secret cookies")
+            cookies_file = Path("/tmp/youtube_cookies.txt")
+            with open(cookies_file, 'w') as f:
+                f.write(os.getenv("YOUTUBE_COOKIES"))
+        
+        send_progress_update(youtube_url, "running", "Downloading YouTube video...", 15.0)
+        
+        # Download YouTube video using yt-dlp
+        import yt_dlp
+        from datetime import datetime
+        
+        # Get video info first
+        ydl_opts_info = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+        }
+        if cookies_file and cookies_file.exists():
+            ydl_opts_info['cookiefile'] = str(cookies_file)
+        
+        with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+            video_info = ydl.extract_info(youtube_url, download=False)
+        
+        if not video_info:
+            raise Exception("Failed to get YouTube video information")
+        
+        # Create filename
+        video_title = video_info.get('title', 'youtube_video')
+        safe_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_title = safe_title.replace(' ', '_')[:50]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{safe_title}_{timestamp}.mp4"
+        video_path = UPLOAD_DIR / filename
+        
+        # Download video
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': str(video_path),
+            'quiet': False,
+        }
+        if cookies_file and cookies_file.exists():
+            ydl_opts['cookiefile'] = str(cookies_file)
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
+        
+        if not video_path.exists():
+            raise Exception("Failed to download YouTube video")
+        
+        # Log video size
+        video_size_mb = get_file_size_mb(video_path)
+        logger.info(f"📊 Downloaded video size: {video_size_mb:.2f}MB")
+        
+        send_progress_update(youtube_url, "running", "Extracting audio...", 30.0)
+        
+        # Extract audio (same as S3 processing)
+        file_id = str(uuid.uuid4())
+        audio_filename = f"{file_id}_youtube_audio.mp3"
+        audio_path = OUTPUT_DIR / audio_filename
+        
+        cmd = [
+            'ffmpeg',
+            '-i', str(video_path),
+            '-vn',
+            '-acodec', 'mp3',
+            '-ab', '192k',
+            '-y',
+            str(audio_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise Exception(f"FFmpeg error: {result.stderr}")
+        
+        send_progress_update(youtube_url, "running", "Processing audio chunks...", 50.0)
+        
+        # Process audio chunks (same as S3 processing)
+        audio_size_mb = get_file_size_mb(audio_path)
+        logger.info(f"📊 Audio file size: {audio_size_mb:.2f}MB (max before chunking: {MAX_AUDIO_SIZE_MB}MB)")
+        
+        if audio_size_mb > MAX_AUDIO_SIZE_MB:
+            logger.info(f"✂️  Audio file exceeds {MAX_AUDIO_SIZE_MB}MB, starting chunking process...")
+            chunk_files = chunk_audio(audio_path, OUTPUT_DIR, CHUNK_DURATION_MINUTES)
+            audio_path.unlink()
+            logger.info("✅ Original audio file deleted")
+        else:
+            logger.info(f"✅ Audio file is under {MAX_AUDIO_SIZE_MB}MB, no chunking needed")
+            chunk_files = [str(audio_path)]
+        
+        send_progress_update(youtube_url, "running", "Transcribing audio...", 70.0)
+        
+        # Transcribe audio (same as S3 processing)
+        import sys
+        sys.path.append("/root")
+        import transcribe_segments
+        
+        audio_files = transcribe_segments.transcribe_audio_segments(output_dir=str(OUTPUT_DIR), video_type=video_type)
+        segment_json = transcribe_segments.create_segment_json(audio_files, video_type)
+        with open("segments.json", "w") as f:
+            import json
+            json.dump(segment_json, f, indent=2)
+        logger.info("✅ Topic analysis and segment creation completed!")
+        
+        send_progress_update(youtube_url, "running", "Extracting video segments...", 85.0)
+        
+        # Extract video segments (same as S3 processing)
+        all_segments = run_video_segment_extraction(video_path)
+        
+        # Separate regular segments from interaction segments
+        video_segments = []
+        interaction_segments = []
+        
+        for segment_path in all_segments:
+            segment_file = Path(segment_path)
+            if "interactions" in str(segment_file):
+                interaction_segments.append(segment_path)
+            else:
+                video_segments.append(segment_path)
+        
+        send_progress_update(youtube_url, "running", "Uploading segments to S3...", 95.0)
+        
+        # Upload segments to S3 (same as S3 processing)
+        s3_urls = []
+        if all_segments:
+            s3_urls = upload_video_segments_to_s3(all_segments)
+        
+        # Clean up temporary files
+        if cookies_file and cookies_file.exists():
+            cookies_file.unlink()
+        
+        # Clean up downloaded video file
+        try:
+            if video_path.exists():
+                video_path.unlink()
+                logger.info("🧹 Cleaned up downloaded video file")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to clean up video file: {e}")
+        
+        # Prepare result
+        result = {
+            "message": f"YouTube video processed successfully",
+            "youtube_url": youtube_url,
+            "video_title": video_title,
+            "video_size_mb": video_size_mb,
+            "chunk_files": chunk_files,
+            "total_chunks": len(chunk_files),
+            "video_segments": video_segments,
+            "total_video_segments": len(video_segments),
+            "interaction_segments": interaction_segments,
+            "total_interaction_segments": len(interaction_segments),
+            "segments_json_path": "segments.json",
+            "s3_urls": s3_urls
+        }
+        
+        send_progress_update(youtube_url, "completed", "YouTube video processing completed successfully!", 100.0, result)
+        logger.info(f"✅ YouTube processing completed for URL: {youtube_url}")
+        
+    except Exception as e:
+        logger.error(f"❌ YouTube processing failed for URL {youtube_url}: {str(e)}")
+        try:
+            send_progress_update(youtube_url, "failed", f"YouTube processing failed: {str(e)}", error=str(e))
+        except Exception as update_error:
+            logger.error(f"❌ Failed to send error update for YouTube URL {youtube_url}: {str(update_error)}")

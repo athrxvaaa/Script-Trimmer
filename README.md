@@ -221,5 +221,5 @@ modal secret create youtube-cookies
 ---
 
 **Built with**: FastAPI, Modal, OpenAI, AWS S3, Vercel  
-**Last Updated**: December 2024  
+**Last Updated**: August 2025  
 **Version**: 2.0.0

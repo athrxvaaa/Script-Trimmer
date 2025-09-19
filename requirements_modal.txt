@@ -17,7 +17,7 @@ httpx==0.27.2
 pydub==0.25.1
 
 # Video downloading
-yt-dlp==2025.7.27.233142.dev0
+yt-dlp==2024.12.13
 
 # AWS S3
 boto3==1.34.0

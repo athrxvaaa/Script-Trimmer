@@ -180,8 +180,10 @@ modal deploy modal_app.py
 
 ### Frontend Deployment
 
+The frontend contains react js and various other 
+
 ```bash
-vercel --prod
+vercel --
 ```
 
 ### Environment Setup
@@ -223,3 +225,4 @@ modal secret create youtube-cookies
 **Built with**: FastAPI, Modal, OpenAI, AWS S3, Vercel  
 **Last Updated**: December 2024  
 **Version**: 2.0.0
+
